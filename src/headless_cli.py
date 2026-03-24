@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import json
 import os
 import sys
@@ -220,33 +221,36 @@ def main(argv: list[str] | None = None) -> int:
         if args.rendered
         else None
     )
-    pipeline = MatchPipeline(config=config, page_source_fetcher=page_source_fetcher)
+    context = page_source_fetcher if page_source_fetcher is not None else nullcontext()
     results = []
     failures = 0
     all_odds_dirty = False
 
-    for url in urls:
-        try:
-            result = pipeline.run_from_url(
-                url,
-                save_html=(not args.no_save_html),
-                save_json=(not args.no_save_json),
-            )
-            results.append(result)
-            if (
-                all_odds_payload is not None
-                and not args.no_save_json
-                and mark_details_fetched_in_payload(
-                    all_odds_payload,
-                    result.match_id or extract_match_id(url),
-                    True,
+    with context:
+        pipeline = MatchPipeline(config=config, page_source_fetcher=page_source_fetcher)
+
+        for url in urls:
+            try:
+                result = pipeline.run_from_url(
+                    url,
+                    save_html=(not args.no_save_html),
+                    save_json=(not args.no_save_json),
                 )
-            ):
-                all_odds_dirty = True
-        except Exception as exc:
-            failures += 1
-            print(f"Failed: {url}")
-            print(f"  Error: {exc}")
+                results.append(result)
+                if (
+                    all_odds_payload is not None
+                    and not args.no_save_json
+                    and mark_details_fetched_in_payload(
+                        all_odds_payload,
+                        result.match_id or extract_match_id(url),
+                        True,
+                    )
+                ):
+                    all_odds_dirty = True
+            except Exception as exc:
+                failures += 1
+                print(f"Failed: {url}")
+                print(f"  Error: {exc}")
 
     if all_odds_dirty and all_odds_path is not None:
         save_json(all_odds_path, all_odds_payload)
@@ -254,6 +258,8 @@ def main(argv: list[str] | None = None) -> int:
     print(f"Base dir: {base_dir}")
     if all_odds_path is not None:
         print(f"All odds source: {all_odds_path}")
+    if page_source_fetcher is not None and len(urls) > 1:
+        print(f"Rendered batch mode: reusing one browser session for {len(urls)} matches")
     for result in results:
         print(f"Match ID: {result.match_id}")
         if result.json_path:

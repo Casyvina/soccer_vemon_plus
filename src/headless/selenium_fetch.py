@@ -30,6 +30,29 @@ class SeleniumPageSourceFetcher:
         )
         self.headless = bool(headless)
         self.timeout_seconds = max(5, int(timeout_seconds))
+        self._driver = None
+
+    def open(self):
+        if self._driver is None:
+            self._driver = self._create_driver()
+        return self
+
+    def close(self) -> None:
+        driver = self._driver
+        self._driver = None
+        if driver is None:
+            return
+        try:
+            driver.quit()
+        except Exception:
+            pass
+
+    def __enter__(self):
+        return self.open()
+
+    def __exit__(self, exc_type, exc, tb) -> bool:
+        self.close()
+        return False
 
     def fetch_pages(self, routes: MatchRouteSet) -> dict[str, str]:
         return self.fetch_urls(
@@ -47,7 +70,10 @@ class SeleniumPageSourceFetcher:
         return str(pages.get(key) or "")
 
     def fetch_urls(self, items: list[tuple[str, str]]) -> dict[str, str]:
-        driver = self._create_driver()
+        driver = self._driver
+        owns_driver = driver is None
+        if driver is None:
+            driver = self._create_driver()
         try:
             pages: dict[str, str] = {}
             for key, url in items:
@@ -57,10 +83,11 @@ class SeleniumPageSourceFetcher:
                 pages[key] = driver.page_source
             return pages
         finally:
-            try:
-                driver.quit()
-            except Exception:
-                pass
+            if owns_driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
 
     def _wait_for_page(self, driver, key: str) -> None:
         wait = WebDriverWait(driver, self.timeout_seconds)

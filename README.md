@@ -73,6 +73,7 @@ This keeps the browser usage short-lived and focused, while moving the real extr
    - `standings/standings/home`
    - `standings/standings/away`
 5. If `--rendered` is enabled, Selenium opens those pages, waits for real content, then returns `page_source`.
+   For multi-match runs, one browser session is reused across the batch.
 6. BeautifulSoup parsers extract:
    - match hero data
    - H2H rows
