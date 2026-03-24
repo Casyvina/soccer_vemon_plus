@@ -1,0 +1,360 @@
+# soccer-vemon-plus
+
+`soccer-vemon-plus` is a small hybrid Flashscore scraper.
+
+It is no longer a desktop GUI app. The repo is now centered on three command-line entrypoints:
+
+- `src/headless_all_odds_cli.py`
+  Open Flashscore, switch to the Odds view, move by day offset, and save daily `all_odds` snapshot JSON.
+- `src/headless_cli.py`
+  Scrape one or more match URLs and save raw match JSON.
+- `src/headless_league_cli.py`
+  Scrape a league `results` page plus its `fixtures` page, expand `Show more matches`, and save the legacy `match_index.json` format.
+
+## What this app does
+
+For daily odds snapshots, it can extract:
+
+- all visible matches from the Flashscore `Odds` view
+- main `1 / X / 2` odds
+- match URLs
+- home and away teams
+- per-match status
+- competition and country context
+- one merged `all_odds/YYYY-MM-DD.json` file per selected day
+
+For matches, it can extract:
+
+- breadcrumb
+- match details
+- H2H sections
+- standings overall
+- standings home
+- standings away
+- `last_matches`
+- `h2h_standings`
+
+For leagues, it can extract:
+
+- league header
+- all loaded results
+- all loaded fixtures
+- round grouping
+- `match_index.json`
+- optional Excel and CSV exports
+
+## Why the app is hybrid
+
+Flashscore does not reliably expose all needed content in plain HTML to a simple `requests` call.
+
+So the app uses a hybrid boundary:
+
+- Selenium:
+  opens the page, accepts cookies, waits for rendered content, and captures final page HTML
+- BeautifulSoup:
+  parses that HTML into structured data
+
+This keeps the browser usage short-lived and focused, while moving the real extraction logic into normal parsers.
+
+## How the app works
+
+### Match flow
+
+1. You pass one or more match URLs to `src/headless_cli.py`, or you point it at a saved `all_odds` day file.
+2. The CLI loads `.env`, loads `src/assets/config.json`, and sets an output root.
+3. If an `all_odds` source is used, the CLI loads match URLs from:
+   - `data/raw/all_odds/YYYY-MM-DD.json`
+   - or a day offset
+   - or an explicit json path
+4. `MatchPipeline` builds direct routes from each match URL:
+   - base match page
+   - `h2h/overall`
+   - `standings/standings/overall`
+   - `standings/standings/home`
+   - `standings/standings/away`
+5. If `--rendered` is enabled, Selenium opens those pages, waits for real content, then returns `page_source`.
+6. BeautifulSoup parsers extract:
+   - match hero data
+   - H2H rows
+   - standings rows
+7. The pipeline also fetches supplemental historical pages to build:
+   - `last_matches`
+   - `h2h_standings`
+8. The final payload is saved as raw JSON, and optional HTML snapshots can also be saved.
+9. When the source was `all_odds` and raw JSON was saved successfully, that entry is marked:
+   - `details_fetched = true`
+   - `details_fetched_at = ...`
+
+### Daily odds flow
+
+1. You pass one or more day offsets to `src/headless_all_odds_cli.py`.
+2. The CLI loads `.env`, loads `src/assets/config.json`, and sets an output root.
+3. `SeleniumOddsPageFetcher` opens Flashscore home, accepts cookies, and switches to the `Odds` tab.
+4. It moves the Flashscore day picker to the requested offset:
+   - `0` = today
+   - `1` = tomorrow
+   - up to `5`
+5. It expands collapsed league sections so hidden matches are included in the final HTML.
+6. BeautifulSoup parses the rendered odds page into match rows with:
+   - time or status
+   - URL
+   - home team
+   - away team
+   - `1 / X / 2` odds
+   - competition
+   - country
+7. The pipeline merges that snapshot into:
+   - `data/raw/all_odds/YYYY-MM-DD.json`
+8. Optional HTML snapshots can also be saved for parser inspection.
+
+### League flow
+
+1. You pass a league URL to `src/headless_league_cli.py`.
+2. The CLI normalizes it to a `results` URL and derives the related `fixtures` URL.
+3. Selenium opens both pages.
+4. On each page it:
+   - waits for league content
+   - scrolls
+   - clicks `Show more matches` until no more rows load
+5. BeautifulSoup parses the final rendered HTML into:
+   - header metadata
+   - round rows
+   - match rows
+6. The league pipeline writes:
+   - `match_index.json`
+   - optional Excel and CSV exports
+   - optional HTML snapshots
+
+## Main files
+
+- `src/headless_all_odds_cli.py`
+  Daily `all_odds` collection CLI.
+- `src/headless_cli.py`
+  Match scraping CLI.
+- `src/headless_league_cli.py`
+  League scraping CLI.
+- `src/headless/pipeline/all_odds_pipeline.py`
+  Daily odds orchestration and merge/save flow.
+- `src/headless/pipeline/match_pipeline.py`
+  Match orchestration and payload assembly.
+- `src/headless/pipeline/league_pipeline.py`
+  League orchestration and export flow.
+- `src/headless/odds_fetch.py`
+  Short-lived Selenium fetcher for the Flashscore Odds view and day picker.
+- `src/headless/selenium_fetch.py`
+  Short-lived rendered fetcher for match pages.
+- `src/headless/league_fetch.py`
+  League fetcher with `Show more matches` expansion.
+- `src/headless/parsers/`
+  BeautifulSoup parsers for all_odds, match, H2H, standings, and league pages.
+- `src/utils/file_saver.py`
+  Raw match JSON saver.
+- `src/utils/all_odds_store.py`
+  Daily odds merge/save helpers.
+- `src/utils/export.py`
+  League `match_index.json`, Excel, and CSV export helpers.
+
+## Repo shape
+
+- `src/assets`
+  Runtime config and local assets.
+- `src/core`
+  Minimal config loading only.
+- `src/formatters`
+  Existing formatter logic kept for downstream compatibility.
+- `src/headless`
+  Active scraping code.
+- `src/processors`
+  Formatter runner.
+- `src/tests`
+  Small parser and route tests.
+- `src/utils`
+  Save/export/path helpers.
+
+## Install
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+## Usage
+
+### Daily all_odds snapshots
+
+Today:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_all_odds_cli.py --browser chrome --day 0
+```
+
+Tomorrow:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_all_odds_cli.py --browser chrome --day 1
+```
+
+Multiple days in one browser session:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_all_odds_cli.py --browser chrome --day 0 --day 1 --day 2
+```
+
+Useful flags:
+
+- `--day`
+  Repeat for multiple offsets. Allowed: `0..5`.
+- `--browser`
+  Override the configured browser for this run.
+- `--no-save-html`
+  Skip saving the rendered odds HTML snapshot.
+- `--no-save-json`
+  Skip saving the merged `all_odds` JSON.
+- `--print-json`
+  Print pipeline output to stdout.
+- `--base-dir`
+  Override the output root for the run.
+
+### Match scraping
+
+Single match:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_cli.py --rendered --url "https://www.flashscore.com/match/football/.../?mid=XXXXXXXX"
+```
+
+Multiple matches:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_cli.py --rendered --url "URL_1" --url "URL_2"
+```
+
+From file:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_cli.py --rendered --urls-file urls.txt
+```
+
+From a saved daily `all_odds` file:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_cli.py --rendered --browser chrome --all-odds-date "2026-03-24"
+```
+
+From a day offset:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_cli.py --rendered --browser chrome --all-odds-day 0
+```
+
+Useful flags:
+
+- `--rendered`
+  Recommended for Flashscore match pages.
+- `--all-odds-date`
+  Load URLs from `data/raw/all_odds/YYYY-MM-DD.json`.
+- `--all-odds-day`
+  Load URLs from the saved `all_odds` file for day offset `0..5`.
+- `--all-odds-file`
+  Load URLs from an explicit `all_odds` json path.
+- `--include-fetched`
+  Include entries already marked `details_fetched=true`.
+- `--limit`
+  Limit the final number of URLs processed.
+- `--browser`
+  Override the configured browser for rendered mode.
+- `--no-save-html`
+  Skip HTML snapshots.
+- `--no-save-json`
+  Skip raw JSON writes.
+- `--print-json`
+  Print pipeline output to stdout.
+- `--base-dir`
+  Override the output root for the run.
+
+### League scraping
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_league_cli.py --url "https://www.flashscore.com/football/england/premier-league/results/"
+```
+
+With sheet export:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_league_cli.py --export-sheets --url "https://www.flashscore.com/football/england/premier-league/results/"
+```
+
+Useful flags:
+
+- `--no-save-html`
+  Skip saving rendered `results.html` and `fixtures.html`.
+- `--no-save-json`
+  Skip `match_index.json`.
+- `--export-sheets`
+  Also build Excel and CSV from the saved league JSON.
+- `--print-json`
+  Print pipeline output to stdout.
+- `--base-dir`
+  Override the output root for the run.
+
+## Output layout
+
+By default, both CLIs write into a repo-local isolated folder:
+
+- `_headless_output/`
+
+This avoids mixing test runs with older live data folders.
+
+Typical layout:
+
+```text
+_headless_output/
+  data/
+    raw/
+      all_odds/
+        2026-03-18.json
+      2026-03-17/
+        2eDEHMBO.json
+    processed/
+      headless_all_odds_html/
+        2026-03-18/
+          odds.html
+      headless_html/
+      headless_league_html/
+  leaguetables/
+    england/
+      premier-league/
+        2025-2026/
+          match_index.json
+          2025-2026-premierleague.xlsx
+          2025-2026-premierleague.csv
+```
+
+You can override the root:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_cli.py --base-dir "C:\temp\soccer-test" --rendered --url "MATCH_URL"
+```
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_league_cli.py --base-dir "C:\temp\soccer-test" --url "LEAGUE_URL"
+```
+
+## Current status
+
+Working locally:
+
+- daily `all_odds` snapshots for day offsets `0..5`
+- match details
+- H2H
+- standings overall, home, and away
+- `last_matches`
+- `h2h_standings`
+- league results
+- league fixtures
+- `Show more matches` expansion
+
+Known constraint:
+
+- some historical H2H matches simply do not expose standings rows on Flashscore, so those entries fall back to `has_table: false`

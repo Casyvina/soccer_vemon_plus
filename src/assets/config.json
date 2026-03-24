@@ -1,0 +1,41 @@
+{
+  "app": {
+    "app_name": "soccer-vemon-plus",
+    "app_version": "0.0.0"
+  },
+  "core": {
+    "default_url": "https://www.flashscore.com/",
+    "read_only": true
+  },
+  "paths": {
+    "base_dir": "",
+    "data_dir": "data/",
+    "excel_dir": "data/excel/",
+    "log_dir": "data/logs/",
+    "backup_dir": "data/backups/"
+  },
+  "scraper": {
+    "default_export_path": "",
+    "default_log_path": "",
+    "all_odds_single_file": true
+  },
+  "browser": {
+    "list": [
+      "FireFox",
+      "Chrome",
+      "Edge"
+    ],
+    "default": "FireFox",
+    "headless": true,
+    "auto_accept_cookie_on_launch": true
+  },
+  "browser_drivers": {
+    "chrome": "",
+    "firefox": "",
+    "edge": ""
+  },
+  "scrape_options": {
+    "batch": 20,
+    "wait": 15
+  }
+}
