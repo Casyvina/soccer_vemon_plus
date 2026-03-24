@@ -120,6 +120,17 @@ def main(argv: list[str] | None = None) -> int:
             f"updated={result.merge_stats.get('updated', 0)} "
             f"unchanged={result.merge_stats.get('unchanged', 0)}"
         )
+        if result.score_summary:
+            print(
+                "Score state: "
+                f"status={result.score_summary.get('status', '')} "
+                f"scored={result.score_summary.get('scored_count', 0)}/"
+                f"{result.score_summary.get('match_count', 0)} "
+                f"pending={result.score_summary.get('pending_eligible_count', 0)} "
+                f"future={result.score_summary.get('future_blocked_count', 0)}"
+            )
+        if result.score_state_path:
+            print(f"Score state JSON: {result.score_state_path}")
 
     if args.print_json:
         serializable = [AllOddsPipeline.to_serializable(item) for item in results]

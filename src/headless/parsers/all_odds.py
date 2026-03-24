@@ -134,6 +134,7 @@ def _parse_match_row(
     )
     time_text, status = _parse_time_and_status(match_el)
     odds = _parse_main_odds(match_el)
+    scores = _parse_row_scores(match_el, score_state=status)
 
     return {
         "match_id": match_id,
@@ -145,6 +146,7 @@ def _parse_match_row(
         "country": str(country or "").strip(),
         "status": str(status or "").strip(),
         "odds": odds,
+        "scores": scores,
         "details_fetched": False,
     }
 
@@ -199,3 +201,45 @@ def _parse_main_odds(match_el: Tag) -> dict[str, str]:
         odds[key] = value
 
     return odds
+
+
+def _parse_row_scores(match_el: Tag, *, score_state: str = "") -> dict[str, int | str]:
+    score_nodes = match_el.select("[data-testid='wcl-matchRowScore']")
+    if not score_nodes:
+        return {}
+
+    home_text = ""
+    away_text = ""
+    node_state = ""
+
+    for node in score_nodes:
+        side = attr_or_empty(node, "data-side")
+        value = text_or_empty(node)
+        if side == "1" and not home_text:
+            home_text = value
+        elif side == "2" and not away_text:
+            away_text = value
+
+        if not node_state:
+            node_state = attr_or_empty(node, "data-state")
+
+    if not home_text or not away_text:
+        return {}
+
+    scores: dict[str, int | str] = {
+        "ft_home": _coerce_score_value(home_text),
+        "ft_away": _coerce_score_value(away_text),
+    }
+
+    resolved_state = str(node_state or score_state or "").strip().lower()
+    if resolved_state:
+        scores["state"] = resolved_state
+
+    return scores
+
+
+def _coerce_score_value(value: str) -> int | str:
+    text = str(value or "").strip()
+    if re.fullmatch(r"-?\d+", text):
+        return int(text)
+    return text

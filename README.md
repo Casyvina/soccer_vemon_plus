@@ -109,11 +109,15 @@ This keeps the browser usage short-lived and focused, while moving the real extr
    - home team
    - away team
    - `1 / X / 2` odds
+   - visible full-time scores when the page shows them
    - competition
    - country
 7. The pipeline merges that snapshot into:
    - `data/raw/all_odds/YYYY-MM-DD.json`
-8. Optional HTML snapshots can also be saved for parser inspection.
+8. When scores are visible, they are merged into the same day file under `scores.ft_home` and `scores.ft_away` without deleting older score keys already stored for that match.
+9. The same run updates:
+   - `data/processed/all_odds_scores_state.json`
+10. Optional HTML snapshots can also be saved for parser inspection.
 
 ### League flow
 
@@ -223,6 +227,8 @@ Useful flags:
   Print pipeline output to stdout.
 - `--base-dir`
   Override the output root for the run.
+
+Rerunning the same day refreshes both the daily match list and the score progress for that date.
 
 ### Match scraping
 
@@ -337,6 +343,7 @@ _headless_output/
       2026-03-17/
         2eDEHMBO.json
     processed/
+      all_odds_scores_state.json
       headless_all_odds_html/
         2026-03-18/
           odds.html
@@ -366,6 +373,8 @@ You can override the root:
 Working locally:
 
 - daily `all_odds` snapshots for day offsets `0..5`
+- daily score refresh merged into the same `all_odds` day files
+- processed `all_odds_scores_state.json` summaries
 - match details
 - H2H
 - standings overall, home, and away

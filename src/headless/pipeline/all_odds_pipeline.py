@@ -9,7 +9,18 @@ from headless.parsers.all_odds import (
     build_all_odds_snapshot,
     infer_selected_date_iso_from_label,
 )
-from utils.all_odds_store import load_json, merge_all_odds, save_json
+from utils.all_odds_score_state import (
+    get_day_state,
+    load_all_odds_score_state,
+    mark_day_state,
+    save_all_odds_score_state,
+)
+from utils.all_odds_store import (
+    load_json,
+    merge_all_odds,
+    save_json,
+    summarize_score_progress,
+)
 from utils.paths import resolve_all_odds_dir, resolve_processed_dir
 
 
@@ -24,6 +35,8 @@ class AllOddsPipelineResult:
     payload: dict
     match_count: int
     merge_stats: dict
+    score_state_path: str
+    score_summary: dict
 
 
 class AllOddsPipeline:
@@ -80,6 +93,13 @@ class AllOddsPipeline:
                     page=page,
                     date_iso=date_iso,
                 )
+                score_state_path, score_summary = self._update_score_state(
+                    payload=payload,
+                    date_iso=date_iso,
+                )
+            else:
+                score_state_path = ""
+                score_summary = {}
 
             results.append(
                 AllOddsPipelineResult(
@@ -92,6 +112,8 @@ class AllOddsPipeline:
                     payload=payload,
                     match_count=match_count,
                     merge_stats=merge_stats,
+                    score_state_path=str(score_state_path or ""),
+                    score_summary=score_summary,
                 )
             )
 
@@ -127,6 +149,39 @@ class AllOddsPipeline:
                 "unchanged": int(stats.unchanged),
             },
         )
+
+    def _update_score_state(
+        self,
+        *,
+        payload: dict,
+        date_iso: str,
+    ) -> tuple[str, dict]:
+        path = resolve_processed_dir(self.config) / "all_odds_scores_state.json"
+        state = load_all_odds_score_state(path)
+        previous = get_day_state(state, date_iso) or {}
+        previous_match_count = previous.get("match_count")
+        summary = summarize_score_progress(payload)
+
+        mark_day_state(
+            state,
+            date_iso,
+            match_count=int(summary.get("match_count", 0)),
+            scored_count=int(summary.get("scored_count", 0)),
+            pending_eligible_count=int(summary.get("pending_eligible_count", 0)),
+            future_blocked_count=int(summary.get("future_blocked_count", 0)),
+            status=str(summary.get("status") or ""),
+            count_changed=(
+                previous_match_count is None
+                or int(previous_match_count) != int(summary.get("match_count", 0))
+            ),
+            previous_match_count=(
+                int(previous_match_count)
+                if previous_match_count is not None
+                else None
+            ),
+        )
+        save_all_odds_score_state(path, state)
+        return str(path), summary
 
     def _save_html_snapshot(self, page: OddsPageFetchResult, date_iso: str) -> str:
         root = resolve_processed_dir(self.config) / "headless_all_odds_html" / date_iso
@@ -173,6 +228,8 @@ class AllOddsPipeline:
             "payload": result.payload,
             "match_count": result.match_count,
             "merge_stats": result.merge_stats,
+            "score_state_path": result.score_state_path,
+            "score_summary": result.score_summary,
         }
 
     @staticmethod

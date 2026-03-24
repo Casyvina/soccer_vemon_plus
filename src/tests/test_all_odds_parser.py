@@ -30,7 +30,8 @@ def test_parse_odds_match_rows_with_context():
             <a class="eventRowLink" href="/match/football/barcelona-SKbpVP5K/newcastle-utd-p6ahwuwJ/?mid=hx7cXCAd"></a>
             <div class="event__participant event__participant--home">Barcelona</div>
             <div class="event__participant event__participant--away">Newcastle</div>
-            <div class="event__time">18:45</div>
+            <span class="event__score event__score--home" data-testid="wcl-matchRowScore" data-state="final" data-side="1">2</span>
+            <span class="event__score event__score--away" data-testid="wcl-matchRowScore" data-state="final" data-side="2">1</span>
             <div class="event__odds">
               <div class="odds__odd event__odd--odd1"><span>1.65</span></div>
               <div class="odds__odd event__odd--odd2"><span>4.78</span></div>
@@ -51,9 +52,13 @@ def test_parse_odds_match_rows_with_context():
     assert rows[0]["away"] == "Newcastle"
     assert rows[0]["competition"] == "Champions League"
     assert rows[0]["country"] == "EUROPE"
+    assert rows[0]["status"] == "final"
     assert rows[0]["odds"]["1"] == "1.65"
     assert rows[0]["odds"]["X"] == "4.78"
     assert rows[0]["odds"]["2"] == "4.98"
+    assert rows[0]["scores"]["ft_home"] == 2
+    assert rows[0]["scores"]["ft_away"] == 1
+    assert rows[0]["scores"]["state"] == "final"
 
     snapshot = build_all_odds_snapshot(
         html,
@@ -63,3 +68,4 @@ def test_parse_odds_match_rows_with_context():
     )
     assert snapshot["date"] == "2026-03-18"
     assert "hx7cXCAd" in snapshot["matches"]
+    assert snapshot["matches"]["hx7cXCAd"]["scores"]["ft_home"] == 2

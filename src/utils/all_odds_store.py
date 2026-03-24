@@ -20,6 +20,17 @@ DAY_CODE_MAP = {
     "SU": 6,
 }
 
+SCORE_TERMINAL_STATUSES = {
+    "abandoned",
+    "awarded",
+    "cancelled",
+    "canceled",
+    "final",
+    "postponed",
+    "walkover",
+    "wo",
+}
+
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -197,11 +208,17 @@ def merge_all_odds(existing: dict[str, Any], snapshot: dict[str, Any]) -> tuple[
         if not prev:
             stats.added += 1
             item = dict(item)
+            score_values = item.pop("scores", None)
             item.setdefault("first_seen_at", merged["updated_at"])
             item["last_seen_at"] = merged["updated_at"]
             item.setdefault("details_fetched", False)
             item.setdefault("details_attempt_count", 0)
             item.setdefault("details_last_status", "pending")
+            _upsert_scores_in_match(
+                item,
+                score_values,
+                updated_at=merged["updated_at"],
+            )
             matches[match_id] = item
             continue
 
@@ -220,6 +237,13 @@ def merge_all_odds(existing: dict[str, Any], snapshot: dict[str, Any]) -> tuple[
             if item.get(key) != prev.get(key):
                 prev[key] = item.get(key)
                 changed = True
+
+        if _upsert_scores_in_match(
+            prev,
+            item.get("scores"),
+            updated_at=merged["updated_at"],
+        ):
+            changed = True
 
         prev["last_seen_at"] = merged["updated_at"]
         prev.setdefault("details_fetched", False)
@@ -334,22 +358,76 @@ def upsert_scores_in_payload(payload: dict[str, Any], match_id: str, scores: dic
     if not isinstance(existing, dict):
         existing = {}
 
-    changed = False
-    for key, value in (scores or {}).items():
-        if value is None or value == "":
-            continue
-        if existing.get(key) != value:
-            existing[key] = value
-            changed = True
-
+    changed = _upsert_scores_in_match(
+        match,
+        scores,
+        updated_at=_now_iso(),
+    )
     if not changed:
         return False
 
-    match["scores"] = sanitize_for_json(existing)
-    match["scores_updated_at"] = _now_iso()
     payload["matches"] = matches
     payload["updated_at"] = _now_iso()
     return True
+
+
+def summarize_score_progress(
+    payload: dict[str, Any],
+    *,
+    now: Optional[datetime] = None,
+    completion_grace_days: int = 5,
+) -> dict[str, Any]:
+    now = now or datetime.now()
+    matches = payload.get("matches") if isinstance(payload, dict) else {}
+    if not isinstance(matches, dict):
+        matches = {}
+
+    date_iso = str(payload.get("date") or "").strip()
+    match_dt = _parse_iso_date(date_iso)
+    today = now.date()
+    is_future = bool(match_dt and match_dt.date() > today)
+
+    match_count = len(matches)
+    scored_count = 0
+    pending_eligible_count = 0
+    future_blocked_count = 0
+
+    for item in matches.values():
+        if not isinstance(item, dict):
+            continue
+
+        if _has_full_time_scores(item):
+            scored_count += 1
+            continue
+
+        if is_future:
+            future_blocked_count += 1
+            continue
+
+        status = _normalize_status(item)
+        if status in SCORE_TERMINAL_STATUSES:
+            continue
+
+        pending_eligible_count += 1
+
+    status = _derive_score_day_status(
+        match_dt=match_dt,
+        now=now,
+        scored_count=scored_count,
+        pending_eligible_count=pending_eligible_count,
+        future_blocked_count=future_blocked_count,
+        completion_grace_days=max(0, int(completion_grace_days)),
+    )
+
+    return {
+        "date": date_iso,
+        "status": status,
+        "match_count": match_count,
+        "scored_count": scored_count,
+        "pending_eligible_count": pending_eligible_count,
+        "future_blocked_count": future_blocked_count,
+        "completion_grace_days": max(0, int(completion_grace_days)),
+    }
 
 
 def mark_details_fetched_in_payload(payload: dict[str, Any], match_id: str, fetched: bool = True) -> bool:
@@ -575,3 +653,124 @@ def _safe_int(value: Any) -> int:
         return int(str(value).strip())
     except Exception:
         return 0
+
+
+def _upsert_scores_in_match(
+    match: dict[str, Any],
+    scores: Any,
+    *,
+    updated_at: str,
+) -> bool:
+    if not isinstance(match, dict):
+        return False
+
+    incoming = scores if isinstance(scores, dict) else {}
+    if not incoming:
+        return False
+
+    existing = match.get("scores")
+    if not isinstance(existing, dict):
+        existing = {}
+
+    changed = False
+    for key, value in incoming.items():
+        normalized = _normalize_score_value(value)
+        if normalized is None or normalized == "":
+            continue
+        if existing.get(key) != normalized:
+            existing[key] = normalized
+            changed = True
+
+    if not changed:
+        return False
+
+    match["scores"] = sanitize_for_json(existing)
+    match["scores_updated_at"] = str(updated_at or _now_iso())
+    return True
+
+
+def _normalize_score_value(value: Any) -> Any:
+    if value is None:
+        return None
+
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if re.fullmatch(r"-?\d+", text):
+            try:
+                return int(text)
+            except Exception:
+                return text
+        return text
+
+    if isinstance(value, numbers.Integral) and not isinstance(value, bool):
+        return int(value)
+
+    if isinstance(value, numbers.Real):
+        try:
+            fv = float(value)
+        except Exception:
+            return None
+        if math.isfinite(fv) and fv.is_integer():
+            return int(fv)
+        return fv if math.isfinite(fv) else None
+
+    return value
+
+
+def _has_full_time_scores(item: dict[str, Any]) -> bool:
+    scores = item.get("scores")
+    if not isinstance(scores, dict):
+        return False
+    return (
+        _normalize_score_value(scores.get("ft_home")) is not None
+        and _normalize_score_value(scores.get("ft_away")) is not None
+    )
+
+
+def _normalize_status(item: dict[str, Any]) -> str:
+    status = str(item.get("status") or "").strip().lower()
+    if status:
+        return status
+
+    scores = item.get("scores")
+    if isinstance(scores, dict):
+        return str(scores.get("state") or "").strip().lower()
+    return ""
+
+
+def _parse_iso_date(date_iso: str) -> Optional[datetime]:
+    text = str(date_iso or "").strip()
+    if not text:
+        return None
+
+    try:
+        return datetime.strptime(text, "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
+def _derive_score_day_status(
+    *,
+    match_dt: Optional[datetime],
+    now: datetime,
+    scored_count: int,
+    pending_eligible_count: int,
+    future_blocked_count: int,
+    completion_grace_days: int,
+) -> str:
+    if future_blocked_count > 0 and pending_eligible_count == 0 and scored_count == 0:
+        return "future"
+
+    if pending_eligible_count <= 0:
+        return "complete"
+
+    if match_dt is not None:
+        age_days = (now.date() - match_dt.date()).days
+        if age_days >= completion_grace_days:
+            return "complete"
+
+    if scored_count > 0:
+        return "incomplete"
+    return "pending"
