@@ -5,6 +5,7 @@ from contextlib import nullcontext
 import json
 import os
 import sys
+import time
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -74,6 +75,29 @@ def build_parser() -> argparse.ArgumentParser:
         "--limit",
         type=int,
         help="Limit the final number of match URLs processed after source loading and dedupe.",
+    )
+    parser.add_argument(
+        "--cache-size",
+        type=int,
+        default=60,
+        help="Maximum number of rendered/raw page HTML responses to keep in the cross-match cache. Use 0 to disable caching.",
+    )
+    parser.add_argument(
+        "--clear-cache-per-match",
+        action="store_true",
+        help="Reset the page cache after every match instead of reusing it across the batch.",
+    )
+    parser.add_argument(
+        "--delay-between-matches",
+        type=float,
+        default=0.0,
+        help="Sleep this many seconds after each successful match before moving to the next one.",
+    )
+    parser.add_argument(
+        "--delay-after-failure",
+        type=float,
+        default=0.0,
+        help="Sleep this many seconds after a failed match before continuing.",
     )
     parser.add_argument(
         "--base-dir",
@@ -298,11 +322,18 @@ def main(argv: list[str] | None = None) -> int:
         started_all_odds_batch = True
 
     with context:
-        pipeline = MatchPipeline(config=config, page_source_fetcher=page_source_fetcher)
+        pipeline = MatchPipeline(
+            config=config,
+            page_source_fetcher=page_source_fetcher,
+            cache_enabled=(int(args.cache_size) > 0),
+            max_cache_entries=max(0, int(args.cache_size)),
+            reset_cache_per_match=args.clear_cache_per_match,
+        )
 
-        for item in work_items:
+        for index, item in enumerate(work_items, start=1):
             url = str(item.get("url") or "").strip()
             tracked_match_id = str(item.get("all_odds_match_id") or "").strip()
+            is_last_item = index >= len(work_items)
 
             if track_all_odds and tracked_match_id and all_odds_path is not None:
                 start_details_attempt_in_payload(all_odds_payload, tracked_match_id)
@@ -343,6 +374,10 @@ def main(argv: list[str] | None = None) -> int:
                         last_completed_match_id=resolved_match_id,
                     )
                     save_json(all_odds_path, all_odds_payload)
+
+                delay = max(0.0, float(args.delay_between_matches))
+                if delay > 0 and not is_last_item:
+                    time.sleep(delay)
             except Exception as exc:
                 failures += 1
                 print(f"Failed: {url}")
@@ -367,6 +402,10 @@ def main(argv: list[str] | None = None) -> int:
                     )
                     save_json(all_odds_path, all_odds_payload)
 
+                delay = max(0.0, float(args.delay_after_failure))
+                if delay > 0 and not is_last_item:
+                    time.sleep(delay)
+
     if track_all_odds and started_all_odds_batch and all_odds_path is not None:
         finish_details_batch_in_payload(
             all_odds_payload,
@@ -389,6 +428,13 @@ def main(argv: list[str] | None = None) -> int:
         )
     if page_source_fetcher is not None and len(urls) > 1:
         print(f"Rendered batch mode: reusing one browser session for {len(urls)} matches")
+    stats = pipeline.cache_stats()
+    print(
+        "Page cache: "
+        f"enabled={bool(stats['enabled'])} "
+        f"entries={stats['entries']}/{stats['max_entries']} "
+        f"hits={stats['hits']} misses={stats['misses']} evictions={stats['evictions']}"
+    )
     for result in results:
         print(f"Match ID: {result.match_id}")
         if result.json_path:

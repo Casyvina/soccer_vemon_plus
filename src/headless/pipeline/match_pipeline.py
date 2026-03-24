@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -31,11 +32,20 @@ class MatchPipeline:
         config=None,
         client: HeadlessHttpClient | None = None,
         page_source_fetcher=None,
+        cache_enabled: bool = True,
+        max_cache_entries: int = 60,
+        reset_cache_per_match: bool = False,
     ):
         self.config = config
         self.client = client or HeadlessHttpClient()
         self.page_source_fetcher = page_source_fetcher
-        self._page_cache: dict[str, str] = {}
+        self.cache_enabled = bool(cache_enabled)
+        self.max_cache_entries = max(0, int(max_cache_entries))
+        self.reset_cache_per_match = bool(reset_cache_per_match)
+        self._page_cache: OrderedDict[str, str] = OrderedDict()
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._cache_evictions = 0
 
     def run_from_url(
         self,
@@ -44,7 +54,8 @@ class MatchPipeline:
         save_html: bool = True,
         save_json: bool = True,
     ) -> MatchPipelineResult:
-        self._page_cache = {}
+        if self.reset_cache_per_match:
+            self.reset_cache()
         routes = build_match_routes(match_url)
         html_pages = self._fetch_route_pages(routes)
 
@@ -131,7 +142,7 @@ class MatchPipeline:
         uncached_by_url: dict[str, list[str]] = {}
 
         for key, url in items:
-            cached = self._page_cache.get(url)
+            cached = self._get_cached_page(url)
             if cached is not None:
                 pages[key] = cached
                 continue
@@ -145,11 +156,27 @@ class MatchPipeline:
             for url, keys in uncached_by_url.items():
                 representative_key = keys[0]
                 html = str(fetched.get(representative_key) or "")
-                self._page_cache[url] = html
+                self._cache_page(url, html)
                 for key in keys:
                     pages[key] = html
 
         return pages
+
+    def reset_cache(self) -> None:
+        self._page_cache.clear()
+        self._cache_hits = 0
+        self._cache_misses = 0
+        self._cache_evictions = 0
+
+    def cache_stats(self) -> dict[str, int]:
+        return {
+            "enabled": int(self.cache_enabled),
+            "entries": len(self._page_cache),
+            "max_entries": self.max_cache_entries,
+            "hits": self._cache_hits,
+            "misses": self._cache_misses,
+            "evictions": self._cache_evictions,
+        }
 
     def _fetch_uncached_pages(self, items: list[tuple[str, str]]) -> dict[str, str]:
         if self.page_source_fetcher is not None:
@@ -162,6 +189,34 @@ class MatchPipeline:
                 return {key: fetch_url(url, key=key) for key, url in items}
 
         return {key: self.client.fetch_text(url) for key, url in items}
+
+    def _get_cached_page(self, url: str) -> str | None:
+        if not self.cache_enabled or self.max_cache_entries <= 0:
+            self._cache_misses += 1
+            return None
+
+        cached = self._page_cache.get(url)
+        if cached is None:
+            self._cache_misses += 1
+            return None
+
+        self._page_cache.move_to_end(url)
+        self._cache_hits += 1
+        return cached
+
+    def _cache_page(self, url: str, html: str) -> None:
+        if not self.cache_enabled or self.max_cache_entries <= 0:
+            return
+
+        if url in self._page_cache:
+            self._page_cache.move_to_end(url)
+            self._page_cache[url] = html
+            return
+
+        self._page_cache[url] = html
+        if len(self._page_cache) > self.max_cache_entries:
+            self._page_cache.popitem(last=False)
+            self._cache_evictions += 1
 
     def _build_supplemental_requests(
         self, h2h_sections: list[dict]

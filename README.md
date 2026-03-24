@@ -74,20 +74,22 @@ This keeps the browser usage short-lived and focused, while moving the real extr
    - `standings/standings/away`
 5. If `--rendered` is enabled, Selenium opens those pages, waits for real content, then returns `page_source`.
    For multi-match runs, one browser session is reused across the batch.
-6. BeautifulSoup parsers extract:
+6. A capped cross-match page cache is kept during the batch unless you disable it.
+   This reduces repeated fetches of the same historical H2H and standings pages without keeping the full day in memory.
+7. BeautifulSoup parsers extract:
    - match hero data
    - H2H rows
    - standings rows
-7. The pipeline also fetches supplemental historical pages to build:
+8. The pipeline also fetches supplemental historical pages to build:
    - `last_matches`
    - `h2h_standings`
-8. The final payload is saved as raw JSON, and optional HTML snapshots can also be saved.
-9. When the source was `all_odds`, the day file also acts as the batch checkpoint:
+9. The final payload is saved as raw JSON, and optional HTML snapshots can also be saved.
+10. When the source was `all_odds`, the day file also acts as the batch checkpoint:
    - per-match attempt count
    - last status
    - last error
    - batch progress in `details_batch`
-10. When the source was `all_odds` and raw JSON was saved successfully, that entry is marked:
+11. When the source was `all_odds` and raw JSON was saved successfully, that entry is marked:
    - `details_fetched = true`
    - `details_fetched_at = ...`
 
@@ -272,6 +274,14 @@ Useful flags:
   When using an `all_odds` source, skip unfetched entries that already reached this attempt count. Use `0` for unlimited.
 - `--limit`
   Limit the final number of URLs processed.
+- `--cache-size`
+  Maximum number of cached page HTML responses to keep across the batch. Use `0` to disable cache reuse.
+- `--clear-cache-per-match`
+  Reset the page cache after every match instead of reusing it across the batch.
+- `--delay-between-matches`
+  Sleep this many seconds after each successful match.
+- `--delay-after-failure`
+  Sleep this many seconds after each failed match.
 - `--browser`
   Override the configured browser for rendered mode.
 - `--no-save-html`
