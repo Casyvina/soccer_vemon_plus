@@ -21,6 +21,10 @@ DAY_CODE_MAP = {
 }
 
 
+def _now_iso() -> str:
+    return datetime.now().isoformat(timespec="seconds")
+
+
 def infer_iso_date(day_month: str, day_code: str, now: Optional[datetime] = None) -> str:
     """
     Convert Flashscore header date like "04-02" + day code like "WE" to "YYYY-MM-DD".
@@ -182,7 +186,7 @@ def merge_all_odds(existing: dict[str, Any], snapshot: dict[str, Any]) -> tuple[
     merged.setdefault("schema", 1)
     merged.setdefault("matches", {})
     merged.setdefault("date", snapshot.get("date", "unknown"))
-    merged["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    merged["updated_at"] = _now_iso()
 
     matches: dict[str, Any] = merged["matches"] or {}
     for match_id, item in (snapshot.get("matches") or {}).items():
@@ -196,6 +200,8 @@ def merge_all_odds(existing: dict[str, Any], snapshot: dict[str, Any]) -> tuple[
             item.setdefault("first_seen_at", merged["updated_at"])
             item["last_seen_at"] = merged["updated_at"]
             item.setdefault("details_fetched", False)
+            item.setdefault("details_attempt_count", 0)
+            item.setdefault("details_last_status", "pending")
             matches[match_id] = item
             continue
 
@@ -217,6 +223,8 @@ def merge_all_odds(existing: dict[str, Any], snapshot: dict[str, Any]) -> tuple[
 
         prev["last_seen_at"] = merged["updated_at"]
         prev.setdefault("details_fetched", False)
+        prev.setdefault("details_attempt_count", 0)
+        prev.setdefault("details_last_status", "pending")
         if changed:
             prev["updated_at"] = merged["updated_at"]
             stats.updated += 1
@@ -269,6 +277,8 @@ def build_snapshot_from_dataframe(df, date_iso: str) -> dict[str, Any]:
             "away": _safe_text(row.get("Away")),
             "odds": odds,
             "details_fetched": False,
+            "details_attempt_count": 0,
+            "details_last_status": "pending",
         }
 
     return {"schema": 1, "date": date_iso, "matches": matches}
@@ -289,14 +299,20 @@ def mark_details_fetched(path: Path, match_id: str, fetched: bool = True) -> boo
     if not isinstance(match, dict):
         return False
 
+    changed = match.get("details_fetched") is not bool(fetched)
     match["details_fetched"] = bool(fetched)
     if fetched:
-        match["details_fetched_at"] = datetime.now().isoformat(timespec="seconds")
+        if match.get("details_last_status") != "success":
+            changed = True
+        match["details_fetched_at"] = _now_iso()
+        match["details_last_status"] = "success"
+        match["details_last_error"] = ""
+        match["details_last_error_at"] = None
 
     payload["matches"] = matches
-    payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    payload["updated_at"] = _now_iso()
     save_json(path, payload)
-    return True
+    return changed
 
 
 def upsert_scores_in_payload(payload: dict[str, Any], match_id: str, scores: dict[str, Any]) -> bool:
@@ -330,9 +346,9 @@ def upsert_scores_in_payload(payload: dict[str, Any], match_id: str, scores: dic
         return False
 
     match["scores"] = sanitize_for_json(existing)
-    match["scores_updated_at"] = datetime.now().isoformat(timespec="seconds")
+    match["scores_updated_at"] = _now_iso()
     payload["matches"] = matches
-    payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    payload["updated_at"] = _now_iso()
     return True
 
 
@@ -351,13 +367,211 @@ def mark_details_fetched_in_payload(payload: dict[str, Any], match_id: str, fetc
         return False
 
     fetched = bool(fetched)
-    prev = match.get("details_fetched")
-    if prev is fetched:
-        return False
-
+    changed = match.get("details_fetched") is not fetched
     match["details_fetched"] = fetched
     if fetched:
-        match["details_fetched_at"] = datetime.now().isoformat(timespec="seconds")
+        if match.get("details_last_status") != "success":
+            changed = True
+        match["details_fetched_at"] = _now_iso()
+        match["details_last_status"] = "success"
+        match["details_last_error"] = ""
+        match["details_last_error_at"] = None
     payload["matches"] = matches
-    payload["updated_at"] = datetime.now().isoformat(timespec="seconds")
+    payload["updated_at"] = _now_iso()
+    return changed
+
+
+def list_detail_candidates(
+    payload: dict[str, Any],
+    *,
+    include_fetched: bool = False,
+    only_failed: bool = False,
+    max_attempts: int = 0,
+) -> list[dict[str, Any]]:
+    matches = payload.get("matches") if isinstance(payload, dict) else {}
+    if not isinstance(matches, dict):
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    for match_id, item in matches.items():
+        if not isinstance(item, dict):
+            continue
+
+        if not include_fetched and bool(item.get("details_fetched")):
+            continue
+
+        status = str(item.get("details_last_status") or "").strip().lower()
+        attempts = _safe_int(item.get("details_attempt_count"))
+        if max_attempts > 0 and not bool(item.get("details_fetched")) and attempts >= max_attempts:
+            continue
+
+        if only_failed and status != "failed":
+            continue
+
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+
+        candidates.append(
+            {
+                "match_id": str(match_id),
+                "url": url,
+                "details_fetched": bool(item.get("details_fetched")),
+                "details_attempt_count": attempts,
+                "details_last_status": status or "pending",
+            }
+        )
+
+    return candidates
+
+
+def start_details_attempt_in_payload(payload: dict[str, Any], match_id: str) -> bool:
+    match = _get_match_row(payload, match_id)
+    if match is None:
+        return False
+
+    match["details_attempt_count"] = _safe_int(match.get("details_attempt_count")) + 1
+    match["details_last_status"] = "running"
+    match["details_last_attempt_at"] = _now_iso()
+    match["details_last_error"] = ""
+    match["details_last_error_at"] = None
+    payload["updated_at"] = _now_iso()
     return True
+
+
+def mark_details_failed_in_payload(
+    payload: dict[str, Any],
+    match_id: str,
+    error_message: str,
+) -> bool:
+    match = _get_match_row(payload, match_id)
+    if match is None:
+        return False
+
+    match["details_fetched"] = False
+    match["details_last_status"] = "failed"
+    match["details_last_error"] = str(error_message or "").strip()
+    match["details_last_error_at"] = _now_iso()
+    payload["updated_at"] = _now_iso()
+    return True
+
+
+def begin_details_batch_in_payload(
+    payload: dict[str, Any],
+    *,
+    source: str,
+    planned_count: int,
+    only_failed: bool,
+    include_fetched: bool,
+    max_attempts: int,
+) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    payload["details_batch"] = {
+        "status": "running",
+        "source": str(source or "").strip(),
+        "planned_count": max(0, int(planned_count)),
+        "processed_count": 0,
+        "success_count": 0,
+        "failure_count": 0,
+        "remaining_count": max(0, int(planned_count)),
+        "current_match_id": "",
+        "last_completed_match_id": "",
+        "only_failed": bool(only_failed),
+        "include_fetched": bool(include_fetched),
+        "max_attempts": int(max_attempts),
+        "started_at": _now_iso(),
+        "finished_at": None,
+        "updated_at": _now_iso(),
+    }
+    payload["updated_at"] = _now_iso()
+    return True
+
+
+def update_details_batch_progress_in_payload(
+    payload: dict[str, Any],
+    *,
+    processed_count: int,
+    success_count: int,
+    failure_count: int,
+    remaining_count: int,
+    current_match_id: str = "",
+    last_completed_match_id: str = "",
+    status: str | None = None,
+) -> bool:
+    if not isinstance(payload, dict):
+        return False
+
+    batch = payload.get("details_batch")
+    if not isinstance(batch, dict):
+        batch = {}
+
+    if status:
+        batch["status"] = str(status)
+    batch["processed_count"] = max(0, int(processed_count))
+    batch["success_count"] = max(0, int(success_count))
+    batch["failure_count"] = max(0, int(failure_count))
+    batch["remaining_count"] = max(0, int(remaining_count))
+    batch["current_match_id"] = str(current_match_id or "").strip()
+    batch["last_completed_match_id"] = str(last_completed_match_id or "").strip()
+    batch["updated_at"] = _now_iso()
+    payload["details_batch"] = batch
+    payload["updated_at"] = _now_iso()
+    return True
+
+
+def finish_details_batch_in_payload(
+    payload: dict[str, Any],
+    *,
+    processed_count: int,
+    success_count: int,
+    failure_count: int,
+    remaining_count: int,
+) -> bool:
+    batch = payload.get("details_batch") if isinstance(payload, dict) else None
+    last_completed_match_id = ""
+    if isinstance(batch, dict):
+        last_completed_match_id = str(batch.get("last_completed_match_id") or "").strip()
+
+    if not update_details_batch_progress_in_payload(
+        payload,
+        processed_count=processed_count,
+        success_count=success_count,
+        failure_count=failure_count,
+        remaining_count=remaining_count,
+        current_match_id="",
+        last_completed_match_id=last_completed_match_id,
+        status=("completed_with_failures" if failure_count else "completed"),
+    ):
+        return False
+
+    batch = payload.get("details_batch")
+    if not isinstance(batch, dict):
+        return False
+    batch["finished_at"] = _now_iso()
+    batch["updated_at"] = _now_iso()
+    payload["details_batch"] = batch
+    payload["updated_at"] = _now_iso()
+    return True
+
+
+def _get_match_row(payload: dict[str, Any], match_id: str) -> dict[str, Any] | None:
+    if not match_id or not isinstance(payload, dict):
+        return None
+
+    matches = payload.get("matches") or {}
+    if not isinstance(matches, dict):
+        return None
+
+    match = matches.get(match_id)
+    if not isinstance(match, dict):
+        return None
+    return match
+
+
+def _safe_int(value: Any) -> int:
+    try:
+        return int(str(value).strip())
+    except Exception:
+        return 0

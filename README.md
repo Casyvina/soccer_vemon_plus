@@ -82,7 +82,12 @@ This keeps the browser usage short-lived and focused, while moving the real extr
    - `last_matches`
    - `h2h_standings`
 8. The final payload is saved as raw JSON, and optional HTML snapshots can also be saved.
-9. When the source was `all_odds` and raw JSON was saved successfully, that entry is marked:
+9. When the source was `all_odds`, the day file also acts as the batch checkpoint:
+   - per-match attempt count
+   - last status
+   - last error
+   - batch progress in `details_batch`
+10. When the source was `all_odds` and raw JSON was saved successfully, that entry is marked:
    - `details_fetched = true`
    - `details_fetched_at = ...`
 
@@ -261,6 +266,10 @@ Useful flags:
   Load URLs from an explicit `all_odds` json path.
 - `--include-fetched`
   Include entries already marked `details_fetched=true`.
+- `--only-failed`
+  When using an `all_odds` source, retry only entries whose last status is `failed`.
+- `--max-attempts`
+  When using an `all_odds` source, skip unfetched entries that already reached this attempt count. Use `0` for unlimited.
 - `--limit`
   Limit the final number of URLs processed.
 - `--browser`
