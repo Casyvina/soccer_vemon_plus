@@ -3,6 +3,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+DEFAULT_RECHECK_STATUSES = ("pending", "incomplete")
+
 
 def _now_iso() -> str:
     return datetime.now().isoformat(timespec="seconds")
@@ -109,3 +111,99 @@ def mark_day_failure(
     state["failed_dates"] = failed
     state["updated_at"] = _now_iso()
     return state
+
+
+def list_recheck_candidates(
+    state: dict[str, Any],
+    *,
+    now: datetime | None = None,
+    statuses: tuple[str, ...] | list[str] | None = None,
+    include_failed: bool = False,
+    min_day_offset: int = -7,
+    max_day_offset: int = 5,
+    limit: int = 0,
+) -> list[dict[str, Any]]:
+    now = now or datetime.now()
+    target_statuses = {
+        str(value or "").strip().lower()
+        for value in (statuses or DEFAULT_RECHECK_STATUSES)
+        if str(value or "").strip()
+    }
+
+    candidates: list[dict[str, Any]] = []
+    seen_dates: set[str] = set()
+
+    dates = state.get("dates") if isinstance(state, dict) else {}
+    if isinstance(dates, dict):
+        for date_iso, row in dates.items():
+            if not isinstance(row, dict):
+                continue
+            status = str(row.get("status") or "").strip().lower()
+            if target_statuses and status not in target_statuses:
+                continue
+
+            day_offset = _resolve_day_offset(date_iso, now)
+            if day_offset is None:
+                continue
+            if day_offset < int(min_day_offset) or day_offset > int(max_day_offset):
+                continue
+
+            seen_dates.add(str(date_iso))
+            candidates.append(
+                {
+                    "date_iso": str(date_iso),
+                    "day_offset": int(day_offset),
+                    "status": status,
+                    "match_count": int(row.get("match_count") or 0),
+                    "updated_at": str(row.get("updated_at") or ""),
+                    "source": "dates",
+                }
+            )
+
+    if include_failed:
+        failed_dates = state.get("failed_dates") if isinstance(state, dict) else {}
+        if isinstance(failed_dates, dict):
+            for date_iso, row in failed_dates.items():
+                if str(date_iso) in seen_dates or not isinstance(row, dict):
+                    continue
+
+                day_offset = _resolve_day_offset(date_iso, now)
+                if day_offset is None:
+                    continue
+                if day_offset < int(min_day_offset) or day_offset > int(max_day_offset):
+                    continue
+
+                candidates.append(
+                    {
+                        "date_iso": str(date_iso),
+                        "day_offset": int(day_offset),
+                        "status": "failed",
+                        "match_count": 0,
+                        "updated_at": str(row.get("updated_at") or ""),
+                        "source": "failed_dates",
+                    }
+                )
+
+    candidates.sort(
+        key=lambda item: (
+            int(item.get("day_offset") or 0),
+            str(item.get("updated_at") or ""),
+            str(item.get("date_iso") or ""),
+        )
+    )
+    if int(limit) > 0:
+        return candidates[: int(limit)]
+    return candidates
+
+
+def _resolve_day_offset(date_iso: str, now: datetime) -> int | None:
+    text = str(date_iso or "").strip()
+    if not text:
+        return None
+
+    try:
+        target = datetime.strptime(text, "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+    return (target - now.date()).days

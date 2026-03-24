@@ -213,10 +213,22 @@ Multiple days in one browser session:
 .\.venv\Scripts\python.exe src\headless_all_odds_cli.py --browser chrome --day 0 --day 1 --day 2
 ```
 
+Automatic recheck of open score-state days:
+
+```powershell
+.\.venv\Scripts\python.exe src\headless_all_odds_cli.py --browser chrome --recheck-open-days
+```
+
 Useful flags:
 
 - `--day`
-  Repeat for multiple offsets. Allowed: `0..5`.
+  Repeat for multiple offsets. Allowed: `-7..5`.
+- `--recheck-open-days`
+  Load day offsets from `data/processed/all_odds_scores_state.json` for dates still marked `pending` or `incomplete`.
+- `--recheck-limit`
+  Limit how many open score-state dates are loaded.
+- `--include-failed-days`
+  Include `failed_dates` from the score-state file when using `--recheck-open-days`.
 - `--browser`
   Override the configured browser for this run.
 - `--no-save-html`
@@ -228,7 +240,7 @@ Useful flags:
 - `--base-dir`
   Override the output root for the run.
 
-Rerunning the same day refreshes both the daily match list and the score progress for that date.
+Rerunning the same day refreshes both the daily match list and the score progress for that date. `--recheck-open-days` uses the saved score-state file to revisit only days that still need another pass.
 
 ### Match scraping
 

@@ -14,6 +14,9 @@ from selenium.webdriver.support.ui import WebDriverWait
 
 from headless.selenium_fetch import SeleniumPageSourceFetcher
 
+MIN_DAY_OFFSET = -7
+MAX_DAY_OFFSET = 5
+
 
 @dataclass
 class OddsPageFetchResult:
@@ -233,8 +236,10 @@ class SeleniumOddsPageFetcher(SeleniumPageSourceFetcher):
         seen: set[int] = set()
         for value in day_offsets:
             offset = int(value)
-            if offset < 0 or offset > 5:
-                raise ValueError("Day offsets must be between 0 and 5.")
+            if offset < MIN_DAY_OFFSET or offset > MAX_DAY_OFFSET:
+                raise ValueError(
+                    f"Day offsets must be between {MIN_DAY_OFFSET} and {MAX_DAY_OFFSET}."
+                )
             if offset in seen:
                 continue
             seen.add(offset)
