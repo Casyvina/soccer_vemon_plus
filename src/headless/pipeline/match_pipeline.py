@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import re
 from collections import OrderedDict
+
 from dataclasses import dataclass
 from datetime import datetime
-from pathlib import Path
 
 from headless.http import HeadlessHttpClient
 from headless.parsers.h2h import parse_h2h_sections
 from headless.parsers.match import parse_match_page
+from headless.parsers.match_summary import parse_match_summary
 from headless.parsers.standings import parse_standings_page
 from headless.routes import MatchRouteSet, build_match_routes
 from utils.all_odds_store import extract_match_id
@@ -63,6 +64,9 @@ class MatchPipeline:
         breadcrumb = match_block.get("breadcrumb") or {}
         infobox = str(match_block.get("infobox") or "")
         match_details = match_block.get("match_details") or {}
+        match_status = match_block.get("match_status") or {
+            "label": "", "normalized": "", "is_terminal": False
+        }
 
         home_team = str(match_details.get("home_team") or "")
         away_team = str(match_details.get("away_team") or "")
@@ -73,30 +77,31 @@ class MatchPipeline:
         standings_overall = parse_standings_page(
             html_pages["standings_overall"], home_team, away_team
         )
-        standings_home = parse_standings_page(
-            html_pages["standings_home"], home_team, away_team
-        )
-        standings_away = parse_standings_page(
-            html_pages["standings_away"], home_team, away_team
-        )
 
         supplemental_pages = self._fetch_named_pages(
             self._build_supplemental_requests(h2h_sections)
         )
 
+        summary_requests = self._collect_summary_requests(
+            h2h_sections, home_team, away_team
+        )
+        summary_pages = self._fetch_summary_pages(summary_requests)
+        summaries = self._parse_summaries(summary_pages, summary_requests)
+
         payload = {
             "url": routes.match_url,
+            "match_details": match_details,
+            "match_status": match_status,
             "breadcrumb": breadcrumb,
             "infobox": infobox,
-            "match_details": match_details,
             "odds": {},
-            "h2h": h2h_sections,
+            "h2h": self._embed_summaries_in_h2h(h2h_sections, summaries),
             "table": standings_overall,
-            "table_home_only": standings_home,
-            "table_away_only": standings_away,
-            "last_matches": self._build_last_matches(h2h_sections, supplemental_pages),
+            "last_matches": self._build_last_matches(
+                h2h_sections, supplemental_pages, summaries
+            ),
             "h2h_standings": self._build_h2h_standings(
-                h2h_sections, supplemental_pages
+                h2h_sections, supplemental_pages, summaries
             ),
         }
 
@@ -132,8 +137,6 @@ class MatchPipeline:
                 ("match", routes.match_url),
                 ("h2h_overall", routes.h2h_overall_url),
                 ("standings_overall", routes.standings_overall_url),
-                ("standings_home", routes.standings_home_url),
-                ("standings_away", routes.standings_away_url),
             ]
         )
 
@@ -218,6 +221,10 @@ class MatchPipeline:
             self._page_cache.popitem(last=False)
             self._cache_evictions += 1
 
+    # ------------------------------------------------------------------
+    # Supplemental requests (last-match h2h + standings, h2h standings)
+    # ------------------------------------------------------------------
+
     def _build_supplemental_requests(
         self, h2h_sections: list[dict]
     ) -> list[tuple[str, str]]:
@@ -225,11 +232,10 @@ class MatchPipeline:
 
         for section in h2h_sections:
             title = str(section.get("section_title") or "").strip()
-            title_upper = title.upper()
             matches = [
-                item for item in (section.get("matches") or []) if isinstance(item, dict)
+                m for m in (section.get("matches") or []) if isinstance(m, dict)
             ]
-            if title_upper.startswith("LAST MATCHES:") and matches:
+            if title.upper().startswith("LAST MATCHES:") and matches:
                 team_name = title.split(":", 1)[-1].strip()
                 if not team_name:
                     continue
@@ -247,19 +253,18 @@ class MatchPipeline:
 
         h2h_section = next(
             (
-                section
-                for section in h2h_sections
-                if "HEAD-TO-HEAD" in str(section.get("section_title") or "").upper()
+                s
+                for s in h2h_sections
+                if "HEAD-TO-HEAD" in str(s.get("section_title") or "").upper()
             ),
             None,
         )
         if not h2h_section:
             return items
 
-        matches = [
-            item for item in (h2h_section.get("matches") or []) if isinstance(item, dict)
-        ][:5]
-        for match_item in matches:
+        for match_item in [
+            m for m in (h2h_section.get("matches") or []) if isinstance(m, dict)
+        ][:3]:
             match_url = str(match_item.get("url") or "").strip()
             match_id = extract_match_id(match_url)
             if not match_id:
@@ -274,29 +279,233 @@ class MatchPipeline:
 
         return items
 
-    def _build_last_matches(self, h2h_sections: list[dict], pages: dict[str, str]) -> dict:
-        result: dict[str, dict] = {}
+    # ------------------------------------------------------------------
+    # Summary page fetching (Selenium — halftime scores + goal rhythm)
+    # ------------------------------------------------------------------
 
+    @staticmethod
+    def _summary_url(match_url: str) -> str:
+        base = str(match_url or "").strip().split("#")[0].rstrip("/")
+        return f"{base}/#/match-summary/match-summary"
+
+    def _collect_summary_requests(
+        self,
+        h2h_sections: list[dict],
+        main_home_team: str,
+        main_away_team: str,
+    ) -> list[dict]:
+        requests: list[dict] = []
+        seen_urls: set[str] = set()
+
+        # Last 1 match per team (home + away LAST MATCHES sections)
         for section in h2h_sections:
             title = str(section.get("section_title") or "").strip()
-            title_upper = title.upper()
-            if not title_upper.startswith("LAST MATCHES:"):
+            if not title.upper().startswith("LAST MATCHES:"):
                 continue
+            section_team = title.split(":", 1)[-1].strip()
+            matches = [
+                m for m in (section.get("matches") or []) if isinstance(m, dict)
+            ]
+            if not matches:
+                continue
+            match_item = matches[0]
+            match_url = str(match_item.get("url") or "").strip()
+            mid = extract_match_id(match_url)
+            if not mid or not match_url:
+                continue
+            summary_url = self._summary_url(match_url)
+            if summary_url in seen_urls:
+                continue
+            seen_urls.add(summary_url)
 
+            source_home = str(match_item.get("home") or "")
+            source_away = str(match_item.get("away") or "")
+            # perspective: section_team is always "home" (tracked team)
+            persp_away = (
+                source_away
+                if section_team.strip().lower() == source_home.strip().lower()
+                else source_home
+            )
+            requests.append({
+                "key": f"summary_last_{mid}",
+                "summary_url": summary_url,
+                "match_id": mid,
+                "match_url": match_url,
+                "source_home": source_home,
+                "source_away": source_away,
+                "perspective_home": section_team,
+                "perspective_away": persp_away,
+                "ft_source_home": str(match_item.get("score_home") or ""),
+                "ft_source_away": str(match_item.get("score_away") or ""),
+            })
+
+        # Last 3 H2H matches — perspective = main match home/away teams
+        h2h_section = next(
+            (
+                s
+                for s in h2h_sections
+                if "HEAD-TO-HEAD" in str(s.get("section_title") or "").upper()
+            ),
+            None,
+        )
+        if h2h_section:
+            for match_item in [
+                m for m in (h2h_section.get("matches") or []) if isinstance(m, dict)
+            ][:3]:
+                match_url = str(match_item.get("url") or "").strip()
+                mid = extract_match_id(match_url)
+                if not mid or not match_url:
+                    continue
+                summary_url = self._summary_url(match_url)
+                if summary_url in seen_urls:
+                    continue
+                seen_urls.add(summary_url)
+                source_home = str(match_item.get("home") or "")
+                source_away = str(match_item.get("away") or "")
+                requests.append({
+                    "key": f"summary_h2h_{mid}",
+                    "summary_url": summary_url,
+                    "match_id": mid,
+                    "match_url": match_url,
+                    "source_home": source_home,
+                    "source_away": source_away,
+                    "perspective_home": main_home_team,
+                    "perspective_away": main_away_team,
+                    "ft_source_home": str(match_item.get("score_home") or ""),
+                    "ft_source_away": str(match_item.get("score_away") or ""),
+                })
+
+        return requests
+
+    def _fetch_summary_pages(self, requests: list[dict]) -> dict[str, str]:
+        if not requests or self.page_source_fetcher is None:
+            return {}
+        fetch_urls = getattr(self.page_source_fetcher, "fetch_urls", None)
+        if not callable(fetch_urls):
+            return {}
+        items = [(r["key"], r["summary_url"]) for r in requests]
+        try:
+            return fetch_urls(items)
+        except Exception:
+            return {}
+
+    def _parse_summaries(
+        self,
+        pages: dict[str, str],
+        requests: list[dict],
+    ) -> dict[str, dict]:
+        """Returns {match_id: half_scores_block} with perspective applied."""
+        result: dict[str, dict] = {}
+        for req in requests:
+            html = pages.get(req["key"], "")
+            if not html:
+                continue
+            try:
+                raw = parse_match_summary(html)
+            except Exception:
+                continue
+            result[req["match_id"]] = self._build_half_scores_block(raw, req)
+        return result
+
+    @staticmethod
+    def _build_half_scores_block(raw_summary: dict, req: dict) -> dict:
+        """Build a half_scores dict from the tracking team's perspective."""
+        source_home = req["source_home"]
+        source_away = req["source_away"]
+        persp_home = req["perspective_home"]
+        persp_away = req["perspective_away"]
+        ft_src_home = req["ft_source_home"]
+        ft_src_away = req["ft_source_away"]
+
+        # Swap when the tracking team (persp_home) was the away side in the source match
+        needs_swap = persp_home.strip().lower() == source_away.strip().lower()
+
+        def pick(h_val: str, a_val: str) -> tuple[str, str]:
+            return (a_val, h_val) if needs_swap else (h_val, a_val)
+
+        h1h, h1a = pick(
+            raw_summary.get("1h_home", ""), raw_summary.get("1h_away", "")
+        )
+        h2h, h2a = pick(
+            raw_summary.get("2h_home", ""), raw_summary.get("2h_away", "")
+        )
+        fth, fta = pick(ft_src_home, ft_src_away)
+
+        rhythm = str(raw_summary.get("goal_rhythm") or "")
+        if needs_swap:
+            rhythm = "".join(
+                "A" if c == "H" else ("H" if c == "A" else c) for c in rhythm
+            )
+
+        goal_events: list[dict] = []
+        for ev in raw_summary.get("goal_events") or []:
+            ev = dict(ev)
+            if needs_swap and ev.get("side") in ("H", "A"):
+                ev["side"] = "A" if ev["side"] == "H" else "H"
+            goal_events.append(ev)
+
+        return {
+            "match_id": req["match_id"],
+            "match_url": req["match_url"],
+            "home_team": persp_home,
+            "away_team": persp_away,
+            "source_home_team": source_home,
+            "source_away_team": source_away,
+            "1h_home": h1h,
+            "1h_away": h1a,
+            "2h_home": h2h,
+            "2h_away": h2a,
+            "ft_home": fth,
+            "ft_away": fta,
+            "goal_rhythm": rhythm,
+            "goal_events": goal_events,
+        }
+
+    # ------------------------------------------------------------------
+    # Payload builders
+    # ------------------------------------------------------------------
+
+    def _embed_summaries_in_h2h(
+        self, h2h_sections: list[dict], summaries: dict[str, dict]
+    ) -> list[dict]:
+        """Embed half_scores into the first match of each LAST MATCHES section."""
+        if not summaries:
+            return h2h_sections
+        result: list[dict] = []
+        for section in h2h_sections:
+            title = str(section.get("section_title") or "").strip()
+            if title.upper().startswith("LAST MATCHES:"):
+                matches = list(section.get("matches") or [])
+                if matches:
+                    first = dict(matches[0])
+                    mid = extract_match_id(str(first.get("url") or ""))
+                    if mid and mid in summaries:
+                        first["half_scores"] = summaries[mid]
+                    matches = [first] + matches[1:]
+                section = {**section, "matches": matches}
+            result.append(section)
+        return result
+
+    def _build_last_matches(
+        self,
+        h2h_sections: list[dict],
+        supplemental_pages: dict[str, str],
+        summaries: dict[str, dict],
+    ) -> dict:
+        result: dict[str, dict] = {}
+        for section in h2h_sections:
+            title = str(section.get("section_title") or "").strip()
+            if not title.upper().startswith("LAST MATCHES:"):
+                continue
             team_name = title.split(":", 1)[-1].strip()
             matches = [
-                item for item in (section.get("matches") or []) if isinstance(item, dict)
+                m for m in (section.get("matches") or []) if isinstance(m, dict)
             ]
             if not team_name or not matches:
                 continue
-
-            last_match = matches[0]
             result[team_name] = self._build_last_match_payload(
-                team_name,
-                last_match,
-                pages,
+                team_name, matches[0], supplemental_pages, summaries
             )
-
         return result
 
     def _build_last_match_payload(
@@ -304,16 +513,20 @@ class MatchPipeline:
         team_name: str,
         match_item: dict,
         pages: dict[str, str],
+        summaries: dict[str, dict],
     ) -> dict:
         match_url = str(match_item.get("url") or "").strip()
         home_team = str(match_item.get("home") or "").strip()
         away_team = str(match_item.get("away") or "").strip()
+        mid = extract_match_id(match_url)
+        half_scores = summaries.get(mid, {}) if mid else {}
 
         fallback = {
             "match_url": match_url,
             "h2h": [],
-            "table": self._empty_table_block(),
+            "table": {},
             "odds_data": {},
+            "half_scores": half_scores,
             "has_table": False,
             "has_odds": False,
         }
@@ -331,13 +544,14 @@ class MatchPipeline:
                 home_team,
                 away_team,
             )
-
+            has_table = self._has_standings_table(table_data)
             return {
                 "match_url": match_url,
                 "h2h": h2h_data,
-                "table": table_data if self._has_standings_table(table_data) else self._empty_table_block(),
+                "table": table_data if has_table else {},
                 "odds_data": {},
-                "has_table": self._has_standings_table(table_data),
+                "half_scores": half_scores,
+                "has_table": has_table,
                 "has_odds": False,
             }
         except Exception:
@@ -346,25 +560,24 @@ class MatchPipeline:
     def _build_h2h_standings(
         self,
         h2h_sections: list[dict],
-        pages: dict[str, str],
+        supplemental_pages: dict[str, str],
+        summaries: dict[str, dict],
     ) -> dict:
         result: dict[str, dict] = {}
         h2h_section = next(
             (
-                section
-                for section in h2h_sections
-                if "HEAD-TO-HEAD" in str(section.get("section_title") or "").upper()
+                s
+                for s in h2h_sections
+                if "HEAD-TO-HEAD" in str(s.get("section_title") or "").upper()
             ),
             None,
         )
         if not h2h_section:
             return result
 
-        matches = [
-            item for item in (h2h_section.get("matches") or []) if isinstance(item, dict)
-        ][:5]
-
-        for match_item in matches:
+        for match_item in [
+            m for m in (h2h_section.get("matches") or []) if isinstance(m, dict)
+        ][:3]:
             match_url = str(match_item.get("url") or "").strip()
             match_id = extract_match_id(match_url)
             if not match_id:
@@ -372,6 +585,8 @@ class MatchPipeline:
 
             home_team = str(match_item.get("home") or "").strip()
             away_team = str(match_item.get("away") or "").strip()
+            half_scores = summaries.get(match_id, {})
+
             fallback = {
                 "match_url": match_url,
                 "total_rows": 0,
@@ -380,12 +595,13 @@ class MatchPipeline:
                 "home_team": {},
                 "away_team": {},
                 "odds_data": {},
+                "half_scores": half_scores,
                 "has_table": False,
             }
 
             try:
                 table_data = parse_standings_page(
-                    pages.get(self._h2h_standings_key(match_id), ""),
+                    supplemental_pages.get(self._h2h_standings_key(match_id), ""),
                     home_team,
                     away_team,
                 )
@@ -397,6 +613,7 @@ class MatchPipeline:
                     "home_team": table_data.get("home_team") or {},
                     "away_team": table_data.get("away_team") or {},
                     "odds_data": {},
+                    "half_scores": half_scores,
                     "has_table": self._has_standings_table(table_data),
                 }
             except Exception:

@@ -115,6 +115,10 @@ class SeleniumPageSourceFetcher:
                 By.CSS_SELECTOR,
                 ".ui-table__body .ui-table__row",
             ),
+            "summary": (
+                By.CSS_SELECTOR,
+                ".smv__participantRow, .wclHeaderSection--summary",
+            ),
         }
 
         selector = selectors.get(key)

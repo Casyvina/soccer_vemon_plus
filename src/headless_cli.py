@@ -10,6 +10,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 
 from core.managers.config_manager import ConfigManager
+from core.managers.supabase_manager import SupabaseManager
 from headless.pipeline.match_pipeline import MatchPipeline
 from headless.selenium_fetch import SeleniumPageSourceFetcher
 from utils.all_odds_store import (
@@ -292,6 +293,7 @@ def main(argv: list[str] | None = None) -> int:
         )
     urls = [item["url"] for item in work_items]
 
+    supabase_manager = SupabaseManager(config=config)
     page_source_fetcher = (
         SeleniumPageSourceFetcher(config=config, browser_name=args.browser)
         if args.rendered
@@ -354,6 +356,13 @@ def main(argv: list[str] | None = None) -> int:
                     save_json=(not args.no_save_json),
                 )
                 results.append(result)
+                try:
+                    _date_iso = all_odds_path.stem if all_odds_path else ""
+                    supabase_manager.upsert_market_match(
+                        result.match_id, _date_iso, result.payload
+                    )
+                except Exception:
+                    pass
                 if track_all_odds and tracked_match_id and all_odds_path is not None:
                     resolved_match_id = result.match_id or tracked_match_id or extract_match_id(url)
                     mark_details_fetched_in_payload(

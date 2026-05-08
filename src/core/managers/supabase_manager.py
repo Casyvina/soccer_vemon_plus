@@ -242,6 +242,47 @@ class SupabaseManager:
             self._log(f"Supabase: market_days failed ({date_key}): {err}")
         return ok
 
+    def upsert_market_match(
+        self, match_id: str, date_iso: str, payload: dict, table: Optional[str] = None
+    ) -> bool:
+        if not self.client:
+            return False
+        match_id = (match_id or "").strip()
+        if not match_id:
+            return False
+
+        table_name = self._safe_identifier(
+            table
+            or self._config_get("supabase", "market_matches_table")
+            or "market_matches",
+            "market_matches",
+        )
+        details = payload.get("match_details") or {}
+        breadcrumb = payload.get("breadcrumb") or {}
+        row = {
+            "match_id": match_id,
+            "market_day_id": date_iso if date_iso and date_iso != "unknown" else None,
+            "kickoff_time": str(details.get("time") or ""),
+            "home_team": str(details.get("home_team") or ""),
+            "away_team": str(details.get("away_team") or ""),
+            "country": str(breadcrumb.get("country") or ""),
+            "competition": str(breadcrumb.get("competition") or ""),
+            "payload": payload,
+            "updated_at": datetime.now().isoformat(timespec="seconds"),
+        }
+
+        ok, err = self._upsert_with_retry(
+            table_name=table_name,
+            payload=row,
+            on_conflict="match_id",
+            label=f"market_match {match_id}",
+        )
+        if ok:
+            self._log(f"Supabase: market_match uploaded ({match_id}).")
+        else:
+            self._log(f"Supabase: market_match failed ({match_id}): {err}")
+        return ok
+
     def upsert_score(
         self,
         match_id: str,
