@@ -76,6 +76,11 @@ def parse_odds_match_rows(html: str, *, page_url: str = "") -> list[dict]:
     return matches
 
 
+def _has_odds(item: dict) -> bool:
+    odds = item.get("odds") or {}
+    return any(str(odds.get(k) or "").strip() for k in ("1b", "Xb", "2b"))
+
+
 def build_all_odds_snapshot(
     html: str,
     *,
@@ -91,7 +96,7 @@ def build_all_odds_snapshot(
     matches = {
         str(item["match_id"]): item
         for item in parse_odds_match_rows(html, page_url=page_url)
-        if str(item.get("match_id") or "").strip()
+        if str(item.get("match_id") or "").strip() and _has_odds(item)
     }
 
     return {
@@ -187,11 +192,11 @@ def _parse_main_odds(match_el: Tag) -> dict[str, str]:
         classes = set(odd_node.get("class") or [])
         key = ""
         if "event__odd--odd1" in classes:
-            key = "1"
+            key = "1b"
         elif "event__odd--odd2" in classes:
-            key = "X"
+            key = "Xb"
         elif "event__odd--odd3" in classes:
-            key = "2"
+            key = "2b"
 
         if not key:
             continue

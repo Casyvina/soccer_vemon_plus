@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
+from datetime import date, timedelta
 
 from selenium.common.exceptions import (
     StaleElementReferenceException,
@@ -46,7 +47,9 @@ class SeleniumOddsPageFetcher(SeleniumPageSourceFetcher):
                     target_offset=offset,
                 )
                 current_offset = offset
-                self._expand_all_collapsed_leagues(driver)
+                target_date = date.today() + timedelta(days=offset)
+                if target_date.weekday() < 5:  # Mon-Fri only
+                    self._expand_all_collapsed_leagues(driver)
                 results[offset] = OddsPageFetchResult(
                     day_offset=offset,
                     page_url=str(driver.current_url or "").strip(),

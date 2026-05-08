@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 
 from core.managers.config_manager import ConfigManager
+from core.managers.supabase_manager import SupabaseManager
 from headless.odds_fetch import SeleniumOddsPageFetcher
 from headless.pipeline.all_odds_pipeline import AllOddsPipeline
 from utils.all_odds_score_state import (
@@ -153,7 +154,12 @@ def main(argv: list[str] | None = None) -> int:
         config=config,
         browser_name=args.browser,
     )
-    pipeline = AllOddsPipeline(config=config, page_source_fetcher=page_source_fetcher)
+    supabase_manager = SupabaseManager(config=config)
+    pipeline = AllOddsPipeline(
+        config=config,
+        page_source_fetcher=page_source_fetcher,
+        supabase_manager=supabase_manager,
+    )
     results = pipeline.run_for_days(
         day_offsets,
         save_html=(not args.no_save_html),

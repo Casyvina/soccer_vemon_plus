@@ -40,11 +40,12 @@ class AllOddsPipelineResult:
 
 
 class AllOddsPipeline:
-    def __init__(self, config=None, page_source_fetcher=None):
+    def __init__(self, config=None, page_source_fetcher=None, supabase_manager=None):
         self.config = config
         self.page_source_fetcher = page_source_fetcher or SeleniumOddsPageFetcher(
             config=config
         )
+        self.supabase_manager = supabase_manager
 
     def run_for_day(
         self,
@@ -97,6 +98,11 @@ class AllOddsPipeline:
                     payload=payload,
                     date_iso=date_iso,
                 )
+                if self.supabase_manager:
+                    self.supabase_manager.upsert_all_odds_snapshot(date_iso, payload)
+                    self.supabase_manager.upsert_market_day_from_odds(
+                        date_iso, payload.get("matches") or {}
+                    )
             else:
                 score_state_path = ""
                 score_summary = {}
