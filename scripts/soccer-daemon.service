@@ -1,0 +1,26 @@
+# Standalone systemd unit — only needed if you want to install the service
+# without running vm_setup.sh (e.g. after a code update).
+#
+# Edit APP_DIR and HOME_DIR to match your VM paths, then:
+#   sudo cp scripts/soccer-daemon.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now soccer-daemon
+
+[Unit]
+Description=Soccer VM Daemon (odds + details + HT scores)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=YOUR_VM_USER
+WorkingDirectory=/home/YOUR_VM_USER/soccer_vemon_plus
+ExecStart=/home/YOUR_VM_USER/soccer_vemon_plus/.venv/bin/python src/headless_daemon.py --base-dir /home/YOUR_VM_USER/soccer_data
+Restart=always
+RestartSec=30
+StandardOutput=append:/home/YOUR_VM_USER/logs/daemon.log
+StandardError=append:/home/YOUR_VM_USER/logs/daemon.log
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

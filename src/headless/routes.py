@@ -11,6 +11,7 @@ class MatchRouteSet:
     standings_overall_url: str
     standings_home_url: str
     standings_away_url: str
+    summary_url: str = ""
 
     def to_dict(self) -> dict[str, str]:
         return {
@@ -63,5 +64,8 @@ def build_match_routes(match_url: str) -> MatchRouteSet:
         ),
         standings_away_url=_build_url(
             parsed, base_path, "standings/standings/away", mid
+        ),
+        summary_url=_build_url(
+            parsed, base_path, "match-summary/match-summary", mid
         ),
     )

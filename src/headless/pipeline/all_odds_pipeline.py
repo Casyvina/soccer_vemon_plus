@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from headless.odds_fetch import OddsPageFetchResult, SeleniumOddsPageFetcher
+from headless.parsers.match_summary import parse_match_summary
 from headless.parsers.all_odds import (
     build_all_odds_snapshot,
     infer_selected_date_iso_from_label,
@@ -16,10 +17,12 @@ from utils.all_odds_score_state import (
     save_all_odds_score_state,
 )
 from utils.all_odds_store import (
+    list_halftime_score_candidates,
     load_json,
     merge_all_odds,
     save_json,
     summarize_score_progress,
+    upsert_scores_in_payload,
 )
 from utils.paths import resolve_all_odds_dir, resolve_processed_dir
 
@@ -100,9 +103,6 @@ class AllOddsPipeline:
                 )
                 if self.supabase_manager:
                     self.supabase_manager.upsert_all_odds_snapshot(date_iso, payload)
-                    self.supabase_manager.upsert_market_day_from_odds(
-                        date_iso, payload.get("matches") or {}
-                    )
             else:
                 score_state_path = ""
                 score_summary = {}
@@ -188,6 +188,90 @@ class AllOddsPipeline:
         )
         save_all_odds_score_state(path, state)
         return str(path), summary
+
+    def run_halftime_score_refresh(
+        self,
+        date_iso: str,
+        *,
+        limit: int = 0,
+        persist: bool = True,
+    ) -> dict:
+        """
+        For a given date, find matches with full-time scores but missing half-time,
+        visit each match summary page, parse half-time scores, update the JSON,
+        and optionally push to Supabase scores table.
+
+        Returns a summary dict:
+          {"date_iso", "candidates", "processed", "updated", "failed", "skipped"}
+        """
+        target_dir = resolve_all_odds_dir(self.config)
+        json_path = target_dir / f"{date_iso}.json"
+        if not json_path.exists():
+            raise ValueError(f"All odds file not found: {json_path}")
+
+        payload = load_json(json_path)
+        candidates = list_halftime_score_candidates(payload, limit=limit)
+
+        processed = 0
+        updated = 0
+        failed = 0
+
+        fetch_summary = getattr(self.page_source_fetcher, "fetch_summary_pages", None)
+        if not callable(fetch_summary):
+            return {
+                "date_iso": date_iso,
+                "candidates": len(candidates),
+                "processed": 0,
+                "updated": 0,
+                "failed": 0,
+                "skipped": len(candidates),
+                "error": "page_source_fetcher does not support fetch_summary_pages",
+            }
+
+        for candidate in candidates:
+            match_id = candidate["match_id"]
+            url = candidate["url"]
+            processed += 1
+            try:
+                pages = fetch_summary([(match_id, url)])
+                html = pages.get(match_id) or ""
+                summary = parse_match_summary(html)
+
+                scores = {
+                    "1h_home": summary.get("1h_home"),
+                    "1h_away": summary.get("1h_away"),
+                    "2h_home": summary.get("2h_home"),
+                    "2h_away": summary.get("2h_away"),
+                }
+                changed = upsert_scores_in_payload(payload, match_id, scores)
+                if changed:
+                    updated += 1
+
+                if self.supabase_manager:
+                    match_item = (payload.get("matches") or {}).get(match_id) or {}
+                    full_scores = (match_item.get("scores") or {})
+                    self.supabase_manager.upsert_score(
+                        match_id=match_id,
+                        date_iso=date_iso,
+                        url=url,
+                        home=str(candidate.get("home") or ""),
+                        away=str(candidate.get("away") or ""),
+                        scores=full_scores,
+                    )
+            except Exception:
+                failed += 1
+
+        if persist and (updated or failed == 0):
+            save_json(json_path, payload)
+
+        return {
+            "date_iso": date_iso,
+            "candidates": len(candidates),
+            "processed": processed,
+            "updated": updated,
+            "failed": failed,
+            "skipped": len(candidates) - processed,
+        }
 
     def _save_html_snapshot(self, page: OddsPageFetchResult, date_iso: str) -> str:
         root = resolve_processed_dir(self.config) / "headless_all_odds_html" / date_iso

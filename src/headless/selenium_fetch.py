@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from selenium import webdriver
 from selenium.common.exceptions import TimeoutException
 from selenium.webdriver.chrome.options import Options as ChromeOptions
@@ -121,7 +123,9 @@ class SeleniumPageSourceFetcher:
             ),
         }
 
-        selector = selectors.get(key)
+        # Keys like "summary_last_<mid>" and "summary_h2h_<mid>" share the summary wait
+        lookup = key if key in selectors else ("summary" if key.startswith("summary") else None)
+        selector = selectors.get(lookup) if lookup else None
         if not selector:
             return
 
@@ -130,6 +134,107 @@ class SeleniumPageSourceFetcher:
         except TimeoutException:
             # Keep the page_source for inspection even when a page did not fully render.
             return
+
+    def fetch_summary_pages(self, items: list[tuple[str, str]]) -> dict[str, str]:
+        """Fetch match summary HTML by navigating to match_url and clicking tabs.
+
+        items: list of (key, match_url) pairs — use the main match URL, not a sub-route.
+        Returns {key: page_source_html}.
+        """
+        driver = self._driver
+        owns_driver = driver is None
+        if driver is None:
+            driver = self._create_driver()
+        try:
+            pages: dict[str, str] = {}
+            for key, match_url in items:
+                pages[key] = self._fetch_summary_tab(driver, match_url)
+            return pages
+        finally:
+            if owns_driver:
+                try:
+                    driver.quit()
+                except Exception:
+                    pass
+
+    def _fetch_summary_tab(self, driver, match_url: str) -> str:
+        """Navigate to match_url, click Summary primary then secondary tab, return page source."""
+        try:
+            driver.get(match_url)
+            self._dismiss_cookie_overlay(driver)
+
+            wait = WebDriverWait(driver, self.timeout_seconds)
+
+            # Wait for primary tabs container
+            try:
+                wait.until(EC.presence_of_element_located(
+                    (By.CSS_SELECTOR, ".detailOver [data-testid='wcl-tabs']")
+                ))
+            except TimeoutException:
+                return driver.page_source
+
+            # Click primary "Summary" tab
+            self._click_tab_by_text(
+                driver,
+                ".detailOver [data-testid='wcl-tabs'] button[data-testid='wcl-tab']",
+                "summary",
+            )
+
+            time.sleep(0.8)
+
+            # Click secondary "Summary" tab inside tabContent__match-summary (if present)
+            self._click_tab_by_text(
+                driver,
+                "div[data-testid='wcl-tabs'][data-type='secondary'] button[data-testid='wcl-tab']",
+                "summary",
+                required=False,
+            )
+
+            # Wait for actual summary content to appear
+            try:
+                wait.until(EC.presence_of_element_located(
+                    (By.CSS_SELECTOR,
+                     ".smv__participantRow, .wclHeaderSection--summary, "
+                     "div.tabContent__match-summary")
+                ))
+            except TimeoutException:
+                pass
+
+            return driver.page_source
+        except Exception:
+            try:
+                return driver.page_source
+            except Exception:
+                return ""
+
+    def _click_tab_by_text(
+        self, driver, selector: str, text: str, required: bool = True
+    ) -> bool:
+        """Find a tab button with matching text and click it. Returns True if clicked."""
+        try:
+            buttons = driver.find_elements(By.CSS_SELECTOR, selector)
+            for btn in buttons:
+                if btn.text.strip().lower() == text.lower():
+                    driver.execute_script("arguments[0].click();", btn)
+                    # Wait briefly for it to become active
+                    try:
+                        WebDriverWait(driver, 5).until(
+                            lambda d: any(
+                                b.text.strip().lower() == text.lower() and (
+                                    b.get_attribute("data-selected") == "true"
+                                    or b.get_attribute("aria-selected") == "true"
+                                    or "active" in (b.get_attribute("class") or "").lower()
+                                    or "selected" in (b.get_attribute("class") or "").lower()
+                                )
+                                for b in d.find_elements(By.CSS_SELECTOR, selector)
+                            )
+                        )
+                    except TimeoutException:
+                        pass
+                    return True
+            return False
+        except Exception:
+            return False
 
     def _dismiss_cookie_overlay(self, driver) -> None:
         try:

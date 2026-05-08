@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -m pip install yarl aiohttp pydantic-extra-types python-dateutil typing-extensions websockets)",
+      "Bash(python -m pip show supabase -f)",
+      "Bash(python -m pip install \"supabase==2.27.2\" \"storage3==2.27.2\" \"postgrest==2.27.2\" \"realtime==2.27.2\" --no-deps)",
+      "Bash(python -m pip install pyiceberg --only-binary :all:)",
+      "Bash(python -m pip install \"supabase-auth==2.27.2\" \"supabase-functions==2.27.2\" --no-deps)",
+      "Bash(.venv/Scripts/python.exe -m src.headless_cli --all-odds-date 2026-05-08 --limit 10 --rendered --no-save-html)",
+      "Bash(.venv/Scripts/python.exe src/headless_cli.py --all-odds-date 2026-05-08 --limit 10 --rendered --no-save-html)",
+      "Bash(.venv/Scripts/python.exe src/headless_cli.py --all-odds-date 2026-05-08 --limit 1 --rendered --no-save-html)",
+      "Bash(.venv/Scripts/python.exe -c \":*)",
+      "Bash(.venv/Scripts/python.exe src/headless_cli.py --all-odds-date 2026-05-08 --limit 1 --rendered --no-save-html --include-fetched)"
+    ]
+  }
+}

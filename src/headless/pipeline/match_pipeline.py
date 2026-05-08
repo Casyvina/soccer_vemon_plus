@@ -285,8 +285,10 @@ class MatchPipeline:
 
     @staticmethod
     def _summary_url(match_url: str) -> str:
-        base = str(match_url or "").strip().split("#")[0].rstrip("/")
-        return f"{base}/#/match-summary/match-summary"
+        try:
+            return build_match_routes(match_url).summary_url
+        except Exception:
+            return ""
 
     def _collect_summary_requests(
         self,
@@ -326,17 +328,20 @@ class MatchPipeline:
                 if section_team.strip().lower() == source_home.strip().lower()
                 else source_home
             )
+            ft_h = str(match_item.get("score_home") or "")
+            ft_a = str(match_item.get("score_away") or "")
             requests.append({
                 "key": f"summary_last_{mid}",
                 "summary_url": summary_url,
+                "zero_zero": self._is_zero_zero(ft_h, ft_a),
                 "match_id": mid,
                 "match_url": match_url,
                 "source_home": source_home,
                 "source_away": source_away,
                 "perspective_home": section_team,
                 "perspective_away": persp_away,
-                "ft_source_home": str(match_item.get("score_home") or ""),
-                "ft_source_away": str(match_item.get("score_away") or ""),
+                "ft_source_home": ft_h,
+                "ft_source_away": ft_a,
             })
 
         # Last 3 H2H matches — perspective = main match home/away teams
@@ -362,17 +367,20 @@ class MatchPipeline:
                 seen_urls.add(summary_url)
                 source_home = str(match_item.get("home") or "")
                 source_away = str(match_item.get("away") or "")
+                ft_h = str(match_item.get("score_home") or "")
+                ft_a = str(match_item.get("score_away") or "")
                 requests.append({
                     "key": f"summary_h2h_{mid}",
                     "summary_url": summary_url,
+                    "zero_zero": self._is_zero_zero(ft_h, ft_a),
                     "match_id": mid,
                     "match_url": match_url,
                     "source_home": source_home,
                     "source_away": source_away,
                     "perspective_home": main_home_team,
                     "perspective_away": main_away_team,
-                    "ft_source_home": str(match_item.get("score_home") or ""),
-                    "ft_source_away": str(match_item.get("score_away") or ""),
+                    "ft_source_home": ft_h,
+                    "ft_source_away": ft_a,
                 })
 
         return requests
@@ -380,14 +388,32 @@ class MatchPipeline:
     def _fetch_summary_pages(self, requests: list[dict]) -> dict[str, str]:
         if not requests or self.page_source_fetcher is None:
             return {}
+        # Skip 0-0 matches — no page visit needed
+        non_zero = [r for r in requests if not r.get("zero_zero") and r.get("match_url")]
+        if not non_zero:
+            return {}
+        # Use tab-clicking fetch_summary_pages when available (navigates to match_url
+        # and clicks the Summary tab — required because there's no standalone sub-page URL)
+        fetch_summary = getattr(self.page_source_fetcher, "fetch_summary_pages", None)
+        if callable(fetch_summary):
+            items = [(r["key"], r["match_url"]) for r in non_zero]
+            try:
+                return fetch_summary(items)
+            except Exception:
+                return {}
+        # Fallback: direct URL fetch (may not return summary content on all pages)
         fetch_urls = getattr(self.page_source_fetcher, "fetch_urls", None)
-        if not callable(fetch_urls):
-            return {}
-        items = [(r["key"], r["summary_url"]) for r in requests]
-        try:
-            return fetch_urls(items)
-        except Exception:
-            return {}
+        if callable(fetch_urls):
+            items = [
+                (r["key"], r["summary_url"])
+                for r in non_zero
+                if r.get("summary_url")
+            ]
+            try:
+                return fetch_urls(items)
+            except Exception:
+                return {}
+        return {}
 
     def _parse_summaries(
         self,
@@ -397,6 +423,27 @@ class MatchPipeline:
         """Returns {match_id: half_scores_block} with perspective applied."""
         result: dict[str, dict] = {}
         for req in requests:
+            mid = req["match_id"]
+            if req.get("zero_zero"):
+                # 0-0 match: store zeros without visiting the summary page
+                result[mid] = {
+                    "match_id": mid,
+                    "match_url": req["match_url"],
+                    "home_team": req["perspective_home"],
+                    "away_team": req["perspective_away"],
+                    "source_home_team": req["source_home"],
+                    "source_away_team": req["source_away"],
+                    "1h_home": "0",
+                    "1h_away": "0",
+                    "2h_home": "0",
+                    "2h_away": "0",
+                    "ft_home": "0",
+                    "ft_away": "0",
+                    "goal_rhythm": "",
+                    "goal_events": [],
+                }
+                continue
+
             html = pages.get(req["key"], "")
             if not html:
                 continue
@@ -404,7 +451,10 @@ class MatchPipeline:
                 raw = parse_match_summary(html)
             except Exception:
                 continue
-            result[req["match_id"]] = self._build_half_scores_block(raw, req)
+            block = self._build_half_scores_block(raw, req)
+            # Only store if we got something useful
+            if any(block.get(k) for k in ("1h_home", "1h_away", "goal_rhythm", "goal_events")):
+                result[mid] = block
         return result
 
     @staticmethod
@@ -674,6 +724,13 @@ class MatchPipeline:
             MatchPipeline.to_serializable(result),
             indent=2,
             ensure_ascii=False,
+        )
+
+    @staticmethod
+    def _is_zero_zero(score_home: str, score_away: str) -> bool:
+        return (
+            str(score_home or "").strip() == "0"
+            and str(score_away or "").strip() == "0"
         )
 
     @staticmethod

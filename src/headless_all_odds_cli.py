@@ -10,6 +10,7 @@ from core.managers.config_manager import ConfigManager
 from core.managers.supabase_manager import SupabaseManager
 from headless.odds_fetch import SeleniumOddsPageFetcher
 from headless.pipeline.all_odds_pipeline import AllOddsPipeline
+from headless.selenium_fetch import SeleniumPageSourceFetcher
 from utils.all_odds_score_state import (
     list_recheck_candidates,
     load_all_odds_score_state,
@@ -72,6 +73,21 @@ def build_parser() -> argparse.ArgumentParser:
         "--print-json",
         action="store_true",
         help="Print the pipeline result JSON to stdout.",
+    )
+    parser.add_argument(
+        "--fetch-halftime-scores",
+        action="store_true",
+        help=(
+            "Instead of fetching odds, refresh half-time scores for matches that "
+            "already have full-time scores but are missing 1H/2H splits. "
+            "Requires --day (date offset) to identify the target date."
+        ),
+    )
+    parser.add_argument(
+        "--ht-limit",
+        type=int,
+        default=0,
+        help="Limit the number of matches processed per date during --fetch-halftime-scores. 0 = no limit.",
     )
     return parser
 
@@ -150,11 +166,50 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         parser.error("Provide at least one valid day offset.")
 
+    supabase_manager = SupabaseManager(config=config)
+
+    # --fetch-halftime-scores: visit match summary pages to fill in 1H/2H splits
+    if args.fetch_halftime_scores:
+        from datetime import datetime, timedelta
+
+        match_fetcher = SeleniumPageSourceFetcher(
+            config=config,
+            browser_name=args.browser,
+        )
+        ht_pipeline = AllOddsPipeline(
+            config=config,
+            page_source_fetcher=match_fetcher,
+            supabase_manager=supabase_manager,
+        )
+        print(f"Base dir: {base_dir}")
+        overall_rc = 0
+        with match_fetcher:
+            for offset in day_offsets:
+                date_iso = (datetime.now() + timedelta(days=offset)).strftime("%Y-%m-%d")
+                try:
+                    summary = ht_pipeline.run_halftime_score_refresh(
+                        date_iso,
+                        limit=max(0, int(args.ht_limit)),
+                        persist=True,
+                    )
+                    print(
+                        f"HT refresh {date_iso}: "
+                        f"candidates={summary['candidates']} "
+                        f"updated={summary['updated']} "
+                        f"failed={summary['failed']} "
+                        f"skipped={summary['skipped']}"
+                    )
+                    if summary["failed"]:
+                        overall_rc = 1
+                except Exception as exc:
+                    print(f"HT refresh {date_iso}: ERROR — {exc}")
+                    overall_rc = 1
+        return overall_rc
+
     page_source_fetcher = SeleniumOddsPageFetcher(
         config=config,
         browser_name=args.browser,
     )
-    supabase_manager = SupabaseManager(config=config)
     pipeline = AllOddsPipeline(
         config=config,
         page_source_fetcher=page_source_fetcher,

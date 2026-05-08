@@ -191,97 +191,103 @@ class SupabaseManager:
             self._log(f"Supabase: all_odds snapshot failed ({date_key}): {err}")
         return ok
 
-    def upsert_market_day_from_odds(
-        self, date_iso: str, matches: dict, table: Optional[str] = None
+    def upsert_market_day(
+        self,
+        market_day: dict,
+        table_days: Optional[str] = None,
+        table_matches: Optional[str] = None,
     ) -> bool:
-        """Upsert a market_days row built from the all_odds snapshot matches dict."""
+        """Upsert a processed market_day (built via build_market_match) to market_days + market_matches."""
         if not self.client:
             return False
-
-        date_key = (date_iso or "").strip()
-        if not date_key or date_key == "unknown":
+        if not isinstance(market_day, dict):
             return False
 
-        payload_rows = []
-        for match_id, m in (matches or {}).items():
-            if not isinstance(m, dict):
-                continue
-            payload_rows.append({
-                "matchId": match_id,
-                "kickoffTime": str(m.get("time") or ""),
-                "homeTeam": str(m.get("home") or ""),
-                "awayTeam": str(m.get("away") or ""),
-                "country": str(m.get("country") or ""),
-                "competition": str(m.get("competition") or ""),
-                "odds": m.get("odds") or {},
-            })
-
-        payload_rows.sort(key=lambda x: (x.get("kickoffTime", ""), x.get("homeTeam", "")))
-
-        table_name = self._safe_identifier(
-            table or self._config_get("supabase", "market_days_table") or "market_days",
+        table_days_name = self._safe_identifier(
+            table_days
+            or self._config_get("supabase", "market_days_table")
+            or "market_days",
             "market_days",
         )
-        row = {
-            "id": date_key,
-            "label": _format_day_label(date_key),
-            "match_count": len(payload_rows),
-            "payload": payload_rows,
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-        }
-
-        ok, err = self._upsert_with_retry(
-            table_name=table_name,
-            payload=row,
-            on_conflict="id",
-            label=f"market_day {date_key}",
-        )
-        if ok:
-            self._log(f"Supabase: market_days uploaded ({date_key}, {len(payload_rows)} matches).")
-        else:
-            self._log(f"Supabase: market_days failed ({date_key}): {err}")
-        return ok
-
-    def upsert_market_match(
-        self, match_id: str, date_iso: str, payload: dict, table: Optional[str] = None
-    ) -> bool:
-        if not self.client:
-            return False
-        match_id = (match_id or "").strip()
-        if not match_id:
-            return False
-
-        table_name = self._safe_identifier(
-            table
+        table_matches_name = self._safe_identifier(
+            table_matches
             or self._config_get("supabase", "market_matches_table")
             or "market_matches",
             "market_matches",
         )
-        details = payload.get("match_details") or {}
-        breadcrumb = payload.get("breadcrumb") or {}
-        row = {
-            "match_id": match_id,
-            "market_day_id": date_iso if date_iso and date_iso != "unknown" else None,
-            "kickoff_time": str(details.get("time") or ""),
-            "home_team": str(details.get("home_team") or ""),
-            "away_team": str(details.get("away_team") or ""),
-            "country": str(breadcrumb.get("country") or ""),
-            "competition": str(breadcrumb.get("competition") or ""),
-            "payload": payload,
-            "updated_at": datetime.now().isoformat(timespec="seconds"),
-        }
 
-        ok, err = self._upsert_with_retry(
-            table_name=table_name,
-            payload=row,
-            on_conflict="match_id",
-            label=f"market_match {match_id}",
+        day_id = str(market_day.get("id") or "").strip()
+        if not day_id:
+            return False
+
+        matches = market_day.get("matches") or []
+        now_iso = datetime.now().isoformat(timespec="seconds")
+
+        day_payload_rows: list[dict] = []
+        day_match_rows: list[dict] = []
+        for item in matches:
+            if not isinstance(item, dict):
+                continue
+            match_id = str(item.get("matchId") or "").strip()
+            if not match_id:
+                continue
+            location = item.get("location") or {}
+            summary = item.get("contextSummary") or {}
+            day_payload_rows.append({
+                "matchId": match_id,
+                "kickoffTime": str(item.get("kickoffTime") or ""),
+                "homeTeam": str(item.get("homeTeam") or ""),
+                "awayTeam": str(item.get("awayTeam") or ""),
+                "country": str(location.get("country") or ""),
+                "competition": str(location.get("competition") or ""),
+            })
+            day_match_rows.append({
+                "match_id": match_id,
+                "market_day_id": day_id,
+                "kickoff_time": str(item.get("kickoffTime") or ""),
+                "home_team": str(item.get("homeTeam") or ""),
+                "away_team": str(item.get("awayTeam") or ""),
+                "country": str(location.get("country") or ""),
+                "competition": str(location.get("competition") or ""),
+                "round": str(location.get("round") or ""),
+                "analyzer": str(summary.get("analyzer") or ""),
+                "payload": item,
+                "updated_at": now_iso,
+            })
+
+        day_row = {
+            "id": day_id,
+            "label": str(market_day.get("label") or _format_day_label(day_id)),
+            "match_count": len(day_payload_rows),
+            "payload": day_payload_rows,
+            "updated_at": now_iso,
+        }
+        ok_day, day_err = self._upsert_with_retry(
+            table_name=table_days_name,
+            payload=day_row,
+            on_conflict="id",
+            label=f"market_day {day_id}",
         )
-        if ok:
-            self._log(f"Supabase: market_match uploaded ({match_id}).")
-        else:
-            self._log(f"Supabase: market_match failed ({match_id}): {err}")
-        return ok
+        if not ok_day:
+            self._log(f"Supabase: market_day failed ({day_id}): {day_err}")
+            return False
+
+        all_ok = True
+        for match_row in day_match_rows:
+            mid = match_row["match_id"]
+            ok, err = self._upsert_with_retry(
+                table_name=table_matches_name,
+                payload=match_row,
+                on_conflict="match_id",
+                label=f"market_match {mid}",
+            )
+            if ok:
+                self._log(f"Supabase: market_match uploaded ({mid}).")
+            else:
+                self._log(f"Supabase: market_match failed ({mid}): {err}")
+                all_ok = False
+        return all_ok
+
 
     def upsert_score(
         self,

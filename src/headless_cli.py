@@ -13,6 +13,7 @@ from core.managers.config_manager import ConfigManager
 from core.managers.supabase_manager import SupabaseManager
 from headless.pipeline.match_pipeline import MatchPipeline
 from headless.selenium_fetch import SeleniumPageSourceFetcher
+from utils.market_payload_builder import build_market_match, _format_market_day_label
 from utils.all_odds_store import (
     begin_details_batch_in_payload,
     finish_details_batch_in_payload,
@@ -128,6 +129,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--browser",
         choices=["chrome", "firefox", "edge"],
         help="Override the configured browser for rendered mode.",
+    )
+    parser.add_argument(
+        "--db-batch-size",
+        type=int,
+        default=50,
+        help="Number of match results to accumulate before flushing to Supabase. Use 1 to push after every match, 0 to push only at the end.",
     )
     return parser
 
@@ -300,6 +307,24 @@ def main(argv: list[str] | None = None) -> int:
         else None
     )
     context = page_source_fetcher if page_source_fetcher is not None else nullcontext()
+    db_batch_size = max(0, int(args.db_batch_size))
+    _date_iso_for_batch = all_odds_path.stem if all_odds_path else ""
+    market_batch: list[dict] = []
+
+    def _flush_market_batch() -> None:
+        if not market_batch or not _date_iso_for_batch:
+            return
+        try:
+            supabase_manager.upsert_market_day({
+                "id": _date_iso_for_batch,
+                "label": _format_market_day_label(_date_iso_for_batch),
+                "matches": list(market_batch),
+            })
+            print(f"DB flush: {len(market_batch)} match(es) pushed to Supabase")
+        except Exception:
+            pass
+        market_batch.clear()
+
     results = []
     failures = 0
     track_all_odds = all_odds_payload is not None and not args.no_save_json
@@ -356,13 +381,16 @@ def main(argv: list[str] | None = None) -> int:
                     save_json=(not args.no_save_json),
                 )
                 results.append(result)
-                try:
-                    _date_iso = all_odds_path.stem if all_odds_path else ""
-                    supabase_manager.upsert_market_match(
-                        result.match_id, _date_iso, result.payload
-                    )
-                except Exception:
-                    pass
+                if _date_iso_for_batch:
+                    try:
+                        market_match = build_market_match(
+                            result.payload, _date_iso_for_batch, result.match_id
+                        )
+                        market_batch.append(market_match)
+                        if db_batch_size > 0 and len(market_batch) >= db_batch_size:
+                            _flush_market_batch()
+                    except Exception:
+                        pass
                 if track_all_odds and tracked_match_id and all_odds_path is not None:
                     resolved_match_id = result.match_id or tracked_match_id or extract_match_id(url)
                     mark_details_fetched_in_payload(
@@ -424,6 +452,8 @@ def main(argv: list[str] | None = None) -> int:
             remaining_count=max(0, tracked_total - tracked_processed),
         )
         save_json(all_odds_path, all_odds_payload)
+
+    _flush_market_batch()  # push any remaining matches
 
     print(f"Base dir: {base_dir}")
     if all_odds_path is not None:

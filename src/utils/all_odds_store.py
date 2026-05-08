@@ -503,6 +503,63 @@ def list_detail_candidates(
     return candidates
 
 
+def list_halftime_score_candidates(
+    payload: dict[str, Any],
+    *,
+    limit: int = 0,
+) -> list[dict[str, Any]]:
+    """
+    Return matches that have full-time scores but are missing half-time scores.
+
+    Each item: {"match_id", "url", "home", "away"}
+    limit=0 means no cap.
+    """
+    matches = payload.get("matches") if isinstance(payload, dict) else {}
+    if not isinstance(matches, dict):
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    for match_id, item in matches.items():
+        if not isinstance(item, dict):
+            continue
+
+        scores = item.get("scores")
+        if not isinstance(scores, dict):
+            continue
+
+        # Must have full-time scores
+        if (
+            _normalize_score_value(scores.get("ft_home")) is None
+            or _normalize_score_value(scores.get("ft_away")) is None
+        ):
+            continue
+
+        # Skip if half-time already present
+        if (
+            _normalize_score_value(scores.get("1h_home")) is not None
+            and _normalize_score_value(scores.get("1h_away")) is not None
+        ):
+            continue
+
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+
+        candidates.append(
+            {
+                "match_id": str(match_id),
+                "url": url,
+                "home": str(item.get("home_team") or item.get("home") or ""),
+                "away": str(item.get("away_team") or item.get("away") or ""),
+            }
+        )
+
+        if limit > 0 and len(candidates) >= limit:
+            break
+
+    return candidates
+
+
 def start_details_attempt_in_payload(payload: dict[str, Any], match_id: str) -> bool:
     match = _get_match_row(payload, match_id)
     if match is None:
