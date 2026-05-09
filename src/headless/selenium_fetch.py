@@ -71,7 +71,7 @@ class SeleniumPageSourceFetcher:
         pages = self.fetch_urls([(key, url)])
         return str(pages.get(key) or "")
 
-    def fetch_urls(self, items: list[tuple[str, str]], batch_size: int = 3) -> dict[str, str]:
+    def fetch_urls(self, items: list[tuple[str, str]], batch_size: int = 1) -> dict[str, str]:
         driver = self._driver
         owns_driver = driver is None
         if driver is None:
