@@ -76,16 +76,23 @@ class MatchPipeline:
                 f"Match page returned no team names — likely live or page did not render: {match_url}"
             )
 
+        print(f"  Match: {home_team} vs {away_team} | {breadcrumb.get('competition','')} {breadcrumb.get('stage','')}")
+
         h2h_sections = parse_h2h_sections(
             html_pages["h2h_overall"], source_url=routes.h2h_overall_url
         )
+        h2h_count = sum(len(s.get("matches") or []) for s in h2h_sections)
+        print(f"  H2H: {len(h2h_sections)} sections, {h2h_count} matches")
+
         standings_overall = parse_standings_page(
             html_pages["standings_overall"], home_team, away_team
         )
+        print(f"  Standings: {standings_overall.get('total_rows', 0)} teams")
 
         supplemental_pages = self._fetch_named_pages(
             self._build_supplemental_requests(h2h_sections)
         )
+        print(f"  Supplemental: {len(supplemental_pages)} pages")
 
         summary_requests = self._collect_summary_requests(
             h2h_sections, home_team, away_team

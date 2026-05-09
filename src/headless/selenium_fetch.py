@@ -79,13 +79,17 @@ class SeleniumPageSourceFetcher:
         try:
             pages: dict[str, str] = {}
             for key, url in items:
+                print(f"  Loading [{key}] {url}")
                 try:
                     driver.get(url)
                 except TimeoutException:
-                    pass
+                    print(f"  Load timeout on [{key}] — using partial page")
                 self._dismiss_cookie_overlay(driver)
                 self._wait_for_page(driver, key)
-                pages[key] = driver.page_source
+                html = driver.page_source
+                pages[key] = html
+                size_kb = len(html) / 1024
+                print(f"  Done [{key}] — {size_kb:.0f} KB")
             return pages
         finally:
             if owns_driver:
