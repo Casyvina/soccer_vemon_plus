@@ -305,6 +305,11 @@ class SeleniumPageSourceFetcher:
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
         )
 
+        ext_path = self._safe_get("browser_drivers", "chrome_extension", "")
+        if ext_path:
+            options.add_argument(f"--disable-extensions-except={ext_path}")
+            options.add_argument(f"--load-extension={ext_path}")
+
         driver_path = self._safe_get("browser_drivers", "chrome", "")
         service = ChromeService(driver_path) if driver_path else None
         driver = webdriver.Chrome(service=service, options=options)
