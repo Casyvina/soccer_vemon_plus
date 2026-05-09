@@ -94,11 +94,8 @@ class MatchPipeline:
         )
         print(f"  Supplemental: {len(supplemental_pages)} pages")
 
-        summary_requests = self._collect_summary_requests(
-            h2h_sections, home_team, away_team
-        )
-        summary_pages = self._fetch_summary_pages(summary_requests)
-        summaries = self._parse_summaries(summary_pages, summary_requests)
+        summary_pages = {}
+        summaries = {}
 
         payload = {
             "url": routes.match_url,
