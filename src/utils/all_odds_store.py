@@ -478,6 +478,10 @@ def list_detail_candidates(
         if not include_fetched and bool(item.get("details_fetched")):
             continue
 
+        match_status = str(item.get("status") or "").strip().lower()
+        if match_status in SCORE_TERMINAL_STATUSES:
+            continue
+
         status = str(item.get("details_last_status") or "").strip().lower()
         attempts = _safe_int(item.get("details_attempt_count"))
         if max_attempts > 0 and not bool(item.get("details_fetched")) and attempts >= max_attempts:

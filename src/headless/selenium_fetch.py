@@ -23,7 +23,7 @@ class SeleniumPageSourceFetcher:
         config=None,
         browser_name: str | None = None,
         headless: bool = True,
-        timeout_seconds: int = 20,
+        timeout_seconds: int = 8,
     ):
         self.config = config
         self.browser_name = self._normalize_browser_name(
@@ -79,7 +79,10 @@ class SeleniumPageSourceFetcher:
         try:
             pages: dict[str, str] = {}
             for key, url in items:
-                driver.get(url)
+                try:
+                    driver.get(url)
+                except TimeoutException:
+                    pass
                 self._dismiss_cookie_overlay(driver)
                 self._wait_for_page(driver, key)
                 pages[key] = driver.page_source
@@ -160,7 +163,10 @@ class SeleniumPageSourceFetcher:
     def _fetch_summary_tab(self, driver, match_url: str) -> str:
         """Navigate to match_url, click Summary primary then secondary tab, return page source."""
         try:
-            driver.get(match_url)
+            try:
+                driver.get(match_url)
+            except TimeoutException:
+                pass
             self._dismiss_cookie_overlay(driver)
 
             wait = WebDriverWait(driver, self.timeout_seconds)
@@ -268,7 +274,9 @@ class SeleniumPageSourceFetcher:
 
         driver_path = self._safe_get("browser_drivers", "chrome", "")
         service = ChromeService(driver_path) if driver_path else None
-        return webdriver.Chrome(service=service, options=options)
+        driver = webdriver.Chrome(service=service, options=options)
+        driver.set_page_load_timeout(30)
+        return driver
 
     def _create_firefox_driver(self):
         options = FirefoxOptions()
@@ -287,7 +295,9 @@ class SeleniumPageSourceFetcher:
 
         driver_path = self._safe_get("browser_drivers", "firefox", "")
         service = FirefoxService(driver_path) if driver_path else None
-        return webdriver.Firefox(service=service, options=options)
+        driver = webdriver.Firefox(service=service, options=options)
+        driver.set_page_load_timeout(30)
+        return driver
 
     def _create_edge_driver(self):
         options = EdgeOptions()
@@ -305,7 +315,9 @@ class SeleniumPageSourceFetcher:
 
         driver_path = self._safe_get("browser_drivers", "edge", "")
         service = EdgeService(driver_path) if driver_path else None
-        return webdriver.Edge(service=service, options=options)
+        driver = webdriver.Edge(service=service, options=options)
+        driver.set_page_load_timeout(30)
+        return driver
 
     def _safe_get(self, section: str, key: str, default=None):
         try:

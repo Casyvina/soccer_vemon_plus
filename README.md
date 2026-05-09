@@ -399,3 +399,21 @@ Working locally:
 Known constraint:
 
 - some historical H2H matches simply do not expose standings rows on Flashscore, so those entries fall back to `has_table: false`
+
+
+gcloud compute scp "c:/Users/Buyen/OneDrive/Desktop/Builds/Python/soccer_cloud/src/utils/all_odds_store.py" soccer-venom:/home/Buyen/soccer_cloud/src/utils/all_odds_store.py --zone=us-east1-c --project=project-57984f7f-29fc-40c3-b0e
+
+
+
+gcloud compute ssh soccer-venom --zone=us-east1-c --project=project-57984f7f-29fc-40c3-b0e
+
+
+sudo systemctl start soccer-daemon && tail -f ~/logs/daemon.log
+
+sudo systemctl restart soccer-daemon && tail -f ~/logs/daemon.log
+
+sudo systemctl stop soccer-daemon
+cd ~/soccer_cloud && .venv/bin/python src/headless_daemon.py --base-dir /home/Buyen/soccer_data 2>&1 | tee /tmp/daemon_manual.log
+
+
+tail -20 ~/logs/daemon.log && echo "---" && sudo systemctl status soccer-daemon --no-pager | grep "Active\|Memory\|CPU"

@@ -10,7 +10,15 @@
       "Bash(.venv/Scripts/python.exe src/headless_cli.py --all-odds-date 2026-05-08 --limit 10 --rendered --no-save-html)",
       "Bash(.venv/Scripts/python.exe src/headless_cli.py --all-odds-date 2026-05-08 --limit 1 --rendered --no-save-html)",
       "Bash(.venv/Scripts/python.exe -c \":*)",
-      "Bash(.venv/Scripts/python.exe src/headless_cli.py --all-odds-date 2026-05-08 --limit 1 --rendered --no-save-html --include-fetched)"
+      "Bash(.venv/Scripts/python.exe src/headless_cli.py --all-odds-date 2026-05-08 --limit 1 --rendered --no-save-html --include-fetched)",
+      "Read(//c/Users/Buyen/OneDrive/Desktop/Builds/Python/soccer_cloud/**)",
+      "Read(//c/Users/Buyen/OneDrive/Desktop/Builds/Python/soccer_scent/src/**)"
+    ],
+    "additionalDirectories": [
+      "c:\\Users\\Buyen\\OneDrive\\Desktop\\Builds\\Python\\soccer_cloud\\scripts",
+      "c:\\Users\\Buyen\\OneDrive\\Desktop\\Builds\\Python\\soccer_cloud\\src\\utils",
+      "c:\\Users\\Buyen\\OneDrive\\Desktop\\Builds\\Python\\soccer_cloud\\src\\core\\managers",
+      "c:\\Users\\Buyen\\OneDrive\\Desktop\\Builds\\Python\\soccer_cloud"
     ]
   }
 }

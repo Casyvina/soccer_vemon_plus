@@ -471,8 +471,8 @@ def build_market_match(
             "homeGoalProfile": _goal_profile(match, "home"),
             "awayGoalProfile": _goal_profile(match, "away"),
             "country": _as_str(breadcrumb.get("country")),
-            "competition": _as_str(breadcrumb.get("competition")),
-            "round": _as_str(breadcrumb.get("stage")),
+            "competition": _as_str(breadcrumb.get("competition")).upper(),
+            "round": _as_str(breadcrumb.get("stage")).upper(),
         },
         "contextSummary": {
             "homeBoost": _build_boost(match, home_team, home_weekly),
@@ -480,7 +480,7 @@ def build_market_match(
             "homeLastGame": _days_ago(current_date, home_last_date),
             "awayLastGame": _days_ago(current_date, away_last_date),
             "cfdLevel": "",
-            "analyzer": _analyzer_code(match),
+            "analyzer": _analyzer_code(match).upper(),
         },
         "h2h": {
             "currentDate": current_date,
@@ -491,7 +491,7 @@ def build_market_match(
         "awayWeekly": away_weekly,
         "tags": {
             "country": _as_str(breadcrumb.get("country")),
-            "competition": _as_str(breadcrumb.get("competition")),
+            "competition": _as_str(breadcrumb.get("competition")).upper(),
             "matchTag": match_tag,
         },
         "filterFields": {
@@ -503,7 +503,7 @@ def build_market_match(
             "awayLastArea": away_last_area,
             "h2hLastStatus": h2h_last_status,
             "country": _as_str(breadcrumb.get("country")),
-            "competition": _as_str(breadcrumb.get("competition")),
+            "competition": _as_str(breadcrumb.get("competition")).upper(),
             "matchTags": match_tag,
         },
     }

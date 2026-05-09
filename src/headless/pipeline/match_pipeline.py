@@ -186,11 +186,9 @@ class MatchPipeline:
             fetch_urls = getattr(self.page_source_fetcher, "fetch_urls", None)
             if callable(fetch_urls):
                 return fetch_urls(items)
-
             fetch_url = getattr(self.page_source_fetcher, "fetch_url", None)
             if callable(fetch_url):
                 return {key: fetch_url(url, key=key) for key, url in items}
-
         return {key: self.client.fetch_text(url) for key, url in items}
 
     def _get_cached_page(self, url: str) -> str | None:

@@ -102,7 +102,16 @@ class AllOddsPipeline:
                     date_iso=date_iso,
                 )
                 if self.supabase_manager:
-                    self.supabase_manager.upsert_all_odds_snapshot(date_iso, payload)
+                    enriched = {
+                        "date": date_iso,
+                        "counts": {
+                            "total": len(payload.get("matches") or {}),
+                            "added_last_merge": merge_stats.get("added", 0),
+                            "updated_last_merge": merge_stats.get("updated", 0),
+                        },
+                        **payload,
+                    }
+                    self.supabase_manager.upsert_all_odds_snapshot(date_iso, enriched)
             else:
                 score_state_path = ""
                 score_summary = {}
