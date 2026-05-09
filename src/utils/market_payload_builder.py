@@ -310,6 +310,7 @@ def _build_h2h_rows(
                 "date": _as_str(item.get("date")),
                 "homeGoals": home_goals,
                 "awayGoals": away_goals,
+                "url": _as_str(item.get("url")),
             }
         )
     return rows
