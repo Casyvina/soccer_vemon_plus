@@ -136,6 +136,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=50,
         help="Number of match results to accumulate before flushing to Supabase. Use 1 to push after every match, 0 to push only at the end.",
     )
+    parser.add_argument(
+        "--restart-every",
+        type=int,
+        default=5,
+        help="Restart the browser session every N matches to prevent memory bloat. Use 0 to disable.",
+    )
     return parser
 
 
@@ -443,6 +449,18 @@ def main(argv: list[str] | None = None) -> int:
                 delay = max(0.0, float(args.delay_after_failure))
                 if delay > 0 and not is_last_item:
                     time.sleep(delay)
+
+            restart_every = max(0, int(args.restart_every))
+            if (
+                page_source_fetcher is not None
+                and restart_every > 0
+                and index % restart_every == 0
+                and not is_last_item
+            ):
+                print(f"  Restarting browser after {restart_every} matches...")
+                page_source_fetcher.close()
+                page_source_fetcher.open()
+                pipeline.reset_cache()
 
     if track_all_odds and started_all_odds_batch and all_odds_path is not None:
         finish_details_batch_in_payload(

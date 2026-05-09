@@ -23,7 +23,7 @@ class SeleniumPageSourceFetcher:
         config=None,
         browser_name: str | None = None,
         headless: bool = True,
-        timeout_seconds: int = 5,
+        timeout_seconds: int = 10,
     ):
         self.config = config
         self.browser_name = self._normalize_browser_name(
@@ -31,7 +31,7 @@ class SeleniumPageSourceFetcher:
             or self._safe_get("browser", "default", "FireFox")
         )
         self.headless = bool(headless)
-        self.timeout_seconds = max(3, int(timeout_seconds))
+        self.timeout_seconds = max(5, int(timeout_seconds))
         self._driver = None
 
     def open(self):
