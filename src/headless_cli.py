@@ -361,6 +361,7 @@ def main(argv: list[str] | None = None) -> int:
             url = str(item.get("url") or "").strip()
             tracked_match_id = str(item.get("all_odds_match_id") or "").strip()
             is_last_item = index >= len(work_items)
+            print(f"Fetching [{index}/{len(work_items)}]: {url}")
 
             if track_all_odds and tracked_match_id and all_odds_path is not None:
                 start_details_attempt_in_payload(all_odds_payload, tracked_match_id)
