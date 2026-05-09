@@ -71,25 +71,54 @@ class SeleniumPageSourceFetcher:
         pages = self.fetch_urls([(key, url)])
         return str(pages.get(key) or "")
 
-    def fetch_urls(self, items: list[tuple[str, str]]) -> dict[str, str]:
+    def fetch_urls(self, items: list[tuple[str, str]], batch_size: int = 3) -> dict[str, str]:
         driver = self._driver
         owns_driver = driver is None
         if driver is None:
             driver = self._create_driver()
         try:
             pages: dict[str, str] = {}
-            for key, url in items:
-                print(f"  Loading [{key}] {url}")
-                try:
-                    driver.get(url)
-                except TimeoutException:
-                    print(f"  Load timeout on [{key}] — using partial page")
-                self._dismiss_cookie_overlay(driver)
-                self._wait_for_page(driver, key)
-                html = driver.page_source
-                pages[key] = html
-                size_kb = len(html) / 1024
-                print(f"  Done [{key}] — {size_kb:.0f} KB")
+            item_list = list(items)
+            for batch_start in range(0, len(item_list), batch_size):
+                batch = item_list[batch_start: batch_start + batch_size]
+                print(f"  Batch loading {[k for k, _ in batch]}")
+                handles: list[str] = []
+
+                # Open all tabs in the batch simultaneously
+                for i, (key, url) in enumerate(batch):
+                    if i == 0:
+                        try:
+                            driver.get(url)
+                        except TimeoutException:
+                            pass
+                        handles.append(driver.current_window_handle)
+                    else:
+                        driver.execute_script("window.open('');")
+                        driver.switch_to.window(driver.window_handles[-1])
+                        try:
+                            driver.get(url)
+                        except TimeoutException:
+                            pass
+                        handles.append(driver.current_window_handle)
+
+                # Collect results from each tab
+                for (key, url), handle in zip(batch, handles):
+                    driver.switch_to.window(handle)
+                    self._dismiss_cookie_overlay(driver)
+                    self._wait_for_page(driver, key)
+                    html = driver.page_source
+                    pages[key] = html
+                    print(f"  Done [{key}] — {len(html) // 1024} KB")
+
+                # Close extra tabs, keep only the first
+                for handle in handles[1:]:
+                    try:
+                        driver.switch_to.window(handle)
+                        driver.close()
+                    except Exception:
+                        pass
+                driver.switch_to.window(handles[0])
+
             return pages
         finally:
             if owns_driver:
