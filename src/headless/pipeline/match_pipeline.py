@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections import OrderedDict
 
 from dataclasses import dataclass
@@ -58,7 +59,10 @@ class MatchPipeline:
         if self.reset_cache_per_match:
             self.reset_cache()
         routes = build_match_routes(match_url)
+
+        t0 = time.time()
         html_pages = self._fetch_route_pages(routes)
+        print(f"  Base pages: {time.time() - t0:.1f}s")
 
         match_block = parse_match_page(html_pages["match"])
         breadcrumb = match_block.get("breadcrumb") or {}
@@ -89,10 +93,11 @@ class MatchPipeline:
         )
         print(f"  Standings: {standings_overall.get('total_rows', 0)} teams")
 
+        t1 = time.time()
         supplemental_pages = self._fetch_named_pages(
             self._build_supplemental_requests(h2h_sections)
         )
-        print(f"  Supplemental: {len(supplemental_pages)} pages")
+        print(f"  Supplemental: {len(supplemental_pages)} pages — {time.time() - t1:.1f}s")
 
         summary_pages = {}
         summaries = {}
