@@ -71,6 +71,11 @@ class MatchPipeline:
         home_team = str(match_details.get("home_team") or "")
         away_team = str(match_details.get("away_team") or "")
 
+        if not home_team or not away_team:
+            raise ValueError(
+                f"Match page returned no team names — likely live or page did not render: {match_url}"
+            )
+
         h2h_sections = parse_h2h_sections(
             html_pages["h2h_overall"], source_url=routes.h2h_overall_url
         )
