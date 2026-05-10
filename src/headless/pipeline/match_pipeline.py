@@ -93,7 +93,11 @@ class MatchPipeline:
         )
         print(f"  Standings: {standings_overall.get('total_rows', 0)} teams")
 
-        supplemental_pages = {}
+        t1 = time.time()
+        supplemental_pages = self._fetch_named_pages(
+            self._build_supplemental_requests(h2h_sections)
+        )
+        print(f"  Supplemental: {len(supplemental_pages)} pages — {time.time() - t1:.1f}s")
 
         summary_pages = {}
         summaries = {}

@@ -23,7 +23,7 @@ class SeleniumPageSourceFetcher:
         config=None,
         browser_name: str | None = None,
         headless: bool = True,
-        timeout_seconds: int = 10,
+        timeout_seconds: int = 15,
     ):
         self.config = config
         self.browser_name = self._normalize_browser_name(
@@ -71,7 +71,7 @@ class SeleniumPageSourceFetcher:
         pages = self.fetch_urls([(key, url)])
         return str(pages.get(key) or "")
 
-    def fetch_urls(self, items: list[tuple[str, str]], batch_size: int = 1) -> dict[str, str]:
+    def fetch_urls(self, items: list[tuple[str, str]], batch_size: int = 3) -> dict[str, str]:
         driver = self._driver
         owns_driver = driver is None
         if driver is None:

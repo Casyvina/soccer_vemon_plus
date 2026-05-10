@@ -139,7 +139,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--restart-every",
         type=int,
-        default=5,
+        default=10,
         help="Restart the browser session every N matches to prevent memory bloat. Use 0 to disable.",
     )
     return parser
