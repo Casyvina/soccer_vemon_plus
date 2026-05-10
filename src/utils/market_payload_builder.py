@@ -302,6 +302,21 @@ def _build_h2h_rows(
             home_goals = ""
             away_goals = ""
 
+        half_scores = _safe_dict(item.get("half_scores"))
+        goal_rhythm = _as_str(half_scores.get("goal_rhythm")).upper()
+        goal_events: list[dict] = []
+        for event_index, event in enumerate(_safe_list(half_scores.get("goal_events")), start=1):
+            event_data = _safe_dict(event)
+            side = _as_str(event_data.get("side")).upper()
+            if side not in {"H", "A"}:
+                continue
+            goal_events.append({
+                "index": event_index,
+                "side": side,
+                "minute": _as_str(event_data.get("minute")),
+                "scoreAfterGoal": _as_str(event_data.get("score_after_goal")),
+            })
+
         rows.append(
             {
                 "event": _as_str(item.get("event")),
@@ -311,6 +326,12 @@ def _build_h2h_rows(
                 "homeGoals": home_goals,
                 "awayGoals": away_goals,
                 "url": _as_str(item.get("url")),
+                "firstHalfHome": _as_str(half_scores.get("1h_home")),
+                "firstHalfAway": _as_str(half_scores.get("1h_away")),
+                "secondHalfHome": _as_str(half_scores.get("2h_home")),
+                "secondHalfAway": _as_str(half_scores.get("2h_away")),
+                "goalRhythm": goal_rhythm,
+                "goalEvents": goal_events,
             }
         )
     return rows

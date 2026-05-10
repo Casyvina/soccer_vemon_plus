@@ -52,15 +52,17 @@ def parse_goal_events(html: str) -> list[dict]:
 
         home_score = text_or_empty(row.select_one(".smv__incidentHomeScore"))
         away_score = text_or_empty(row.select_one(".smv__incidentAwayScore"))
-        if not home_score and not away_score:
+        if home_score and away_score:
+            score_after = f"{home_score}-{away_score}"
+        elif home_score or away_score:
+            # Only one container present — it already contains the full "H - A" score
+            score_after = home_score or away_score
+        else:
             m = re.search(
                 r"(\d+)\s*[-:]\s*(\d+)",
                 text_or_empty(row.select_one(".smv__incidentScore")),
             )
-            if m:
-                home_score, away_score = m.group(1), m.group(2)
-
-        score_after = f"{home_score}-{away_score}" if (home_score or away_score) else ""
+            score_after = f"{m.group(1)}-{m.group(2)}" if m else ""
         goals.append({
             "side": side,
             "player": player,

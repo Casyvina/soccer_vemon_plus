@@ -520,22 +520,19 @@ class MatchPipeline:
     def _embed_summaries_in_h2h(
         self, h2h_sections: list[dict], summaries: dict[str, dict]
     ) -> list[dict]:
-        """Embed half_scores into the first match of each LAST MATCHES section."""
+        """Embed half_scores into any match item whose match_id is in summaries."""
         if not summaries:
             return h2h_sections
         result: list[dict] = []
         for section in h2h_sections:
-            title = str(section.get("section_title") or "").strip()
-            if title.upper().startswith("LAST MATCHES:"):
-                matches = list(section.get("matches") or [])
-                if matches:
-                    first = dict(matches[0])
-                    mid = extract_match_id(str(first.get("url") or ""))
-                    if mid and mid in summaries:
-                        first["half_scores"] = summaries[mid]
-                    matches = [first] + matches[1:]
-                section = {**section, "matches": matches}
-            result.append(section)
+            new_matches = []
+            for m in (section.get("matches") or []):
+                m = dict(m)
+                mid = extract_match_id(str(m.get("url") or ""))
+                if mid and mid in summaries:
+                    m["half_scores"] = summaries[mid]
+                new_matches.append(m)
+            result.append({**section, "matches": new_matches})
         return result
 
     def _build_last_matches(
