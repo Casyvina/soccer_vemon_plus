@@ -223,7 +223,8 @@ class VmDaemon:
 
                 success = 0
                 failed = 0
-                for candidate in candidates:
+                restart_every = 10
+                for i, candidate in enumerate(candidates):
                     match_id = candidate["match_id"]
                     url = candidate["url"]
                     try:
@@ -247,6 +248,12 @@ class VmDaemon:
                         mark_details_failed_in_payload(payload, match_id, str(exc))
                         save_json(path, payload)
                         failed += 1
+
+                    if restart_every > 0 and (i + 1) % restart_every == 0 and (i + 1) < len(candidates):
+                        _log("info", f"  Restarting browser after {restart_every} matches...")
+                        match_fetcher.close()
+                        match_fetcher.open()
+                        pipeline.reset_cache()
 
                 _flush()
                 _log("info", f"  Details {date_iso} done: ok={success} failed={failed}")
