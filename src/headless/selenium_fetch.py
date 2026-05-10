@@ -128,7 +128,13 @@ class SeleniumPageSourceFetcher:
                     pass
 
     def _wait_for_page(self, driver, key: str) -> None:
-        wait = WebDriverWait(driver, self.timeout_seconds)
+        # Summary pages load halftime data asynchronously — give them extra time
+        effective_timeout = (
+            max(self.timeout_seconds, 20)
+            if key == "summary" or key.startswith("summary")
+            else self.timeout_seconds
+        )
+        wait = WebDriverWait(driver, effective_timeout)
         selectors: dict[str, tuple[str, str]] = {
             "match": (
                 By.XPATH,

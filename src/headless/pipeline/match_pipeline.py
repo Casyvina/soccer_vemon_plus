@@ -404,26 +404,13 @@ class MatchPipeline:
         if not requests or self.page_source_fetcher is None:
             return {}
         # Skip 0-0 matches — no page visit needed
-        non_zero = [r for r in requests if not r.get("zero_zero") and r.get("match_url")]
+        non_zero = [r for r in requests if not r.get("zero_zero") and r.get("summary_url")]
         if not non_zero:
             return {}
-        # Use tab-clicking fetch_summary_pages when available (navigates to match_url
-        # and clicks the Summary tab — required because there's no standalone sub-page URL)
-        fetch_summary = getattr(self.page_source_fetcher, "fetch_summary_pages", None)
-        if callable(fetch_summary):
-            items = [(r["key"], r["match_url"]) for r in non_zero]
-            try:
-                return fetch_summary(items)
-            except Exception:
-                return {}
-        # Fallback: direct URL fetch (may not return summary content on all pages)
+        # Direct URL fetch — summary_url is a dedicated sub-page route like h2h/standings
         fetch_urls = getattr(self.page_source_fetcher, "fetch_urls", None)
         if callable(fetch_urls):
-            items = [
-                (r["key"], r["summary_url"])
-                for r in non_zero
-                if r.get("summary_url")
-            ]
+            items = [(r["key"], r["summary_url"]) for r in non_zero]
             try:
                 return fetch_urls(items)
             except Exception:
