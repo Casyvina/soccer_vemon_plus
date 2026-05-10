@@ -178,7 +178,7 @@ class SeleniumPageSourceFetcher:
             return
 
     def fetch_summary_pages(self, items: list[tuple[str, str]]) -> dict[str, str]:
-        """Fetch match summary HTML by navigating to match_url and clicking tabs.
+        """Fetch match summary HTML — opens all URLs in parallel tabs, then clicks Summary on each.
 
         items: list of (key, match_url) pairs — use the main match URL, not a sub-route.
         Returns {key: page_source_html}.
@@ -189,8 +189,46 @@ class SeleniumPageSourceFetcher:
             driver = self._create_driver()
         try:
             pages: dict[str, str] = {}
-            for key, match_url in items:
-                pages[key] = self._fetch_summary_tab(driver, match_url)
+            item_list = list(items)
+            if not item_list:
+                return pages
+
+            # Phase 1: open all match URLs in parallel tabs
+            handles: list[tuple[str, str]] = []
+            for i, (key, match_url) in enumerate(item_list):
+                if i == 0:
+                    try:
+                        driver.get(match_url)
+                    except TimeoutException:
+                        pass
+                    handles.append((key, driver.current_window_handle))
+                else:
+                    driver.execute_script("window.open('');")
+                    driver.switch_to.window(driver.window_handles[-1])
+                    try:
+                        driver.get(match_url)
+                    except TimeoutException:
+                        pass
+                    handles.append((key, driver.current_window_handle))
+
+            # Phase 2: click Summary tab on each loaded tab sequentially
+            for key, handle in handles:
+                driver.switch_to.window(handle)
+                self._dismiss_cookie_overlay(driver)
+                html = self._click_summary_and_capture(driver)
+                pages[key] = html
+                print(f"  Done [summary {key}] — {len(html) // 1024} KB")
+
+            # Cleanup extra tabs
+            for _, handle in handles[1:]:
+                try:
+                    driver.switch_to.window(handle)
+                    driver.close()
+                except Exception:
+                    pass
+            if handles:
+                driver.switch_to.window(handles[0][1])
+
             return pages
         finally:
             if owns_driver:
@@ -198,6 +236,37 @@ class SeleniumPageSourceFetcher:
                     driver.quit()
                 except Exception:
                     pass
+
+    def _click_summary_and_capture(self, driver) -> str:
+        """On an already-loaded match page, click Summary tab and return page source."""
+        wait = WebDriverWait(driver, self.timeout_seconds)
+        try:
+            wait.until(EC.presence_of_element_located(
+                (By.CSS_SELECTOR, ".detailOver [data-testid='wcl-tabs']")
+            ))
+        except TimeoutException:
+            return driver.page_source
+        self._click_tab_by_text(
+            driver,
+            ".detailOver [data-testid='wcl-tabs'] button[data-testid='wcl-tab']",
+            "summary",
+        )
+        time.sleep(0.5)
+        self._click_tab_by_text(
+            driver,
+            "div[data-testid='wcl-tabs'][data-type='secondary'] button[data-testid='wcl-tab']",
+            "summary",
+            required=False,
+        )
+        try:
+            wait.until(EC.presence_of_element_located(
+                (By.CSS_SELECTOR,
+                 ".smv__participantRow, .wclHeaderSection--summary, "
+                 "div.tabContent__match-summary")
+            ))
+        except TimeoutException:
+            pass
+        return driver.page_source
 
     def _fetch_summary_tab(self, driver, match_url: str) -> str:
         """Navigate to match_url, click Summary primary then secondary tab, return page source."""

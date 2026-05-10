@@ -99,8 +99,11 @@ class MatchPipeline:
         )
         print(f"  Supplemental: {len(supplemental_pages)} pages — {time.time() - t1:.1f}s")
 
-        summary_pages = {}
-        summaries = {}
+        summary_requests = self._collect_summary_requests(h2h_sections, home_team, away_team)
+        t2 = time.time()
+        summary_pages = self._fetch_summary_pages(summary_requests)
+        summaries = self._parse_summaries(summary_pages, summary_requests)
+        print(f"  Summaries: {len(summaries)} parsed — {time.time() - t2:.1f}s")
 
         payload = {
             "url": routes.match_url,
@@ -401,15 +404,15 @@ class MatchPipeline:
         if not requests or self.page_source_fetcher is None:
             return {}
         # Skip 0-0 matches — no page visit needed
-        non_zero = [r for r in requests if not r.get("zero_zero") and r.get("summary_url")]
+        non_zero = [r for r in requests if not r.get("zero_zero") and r.get("match_url")]
         if not non_zero:
             return {}
-        # Direct URL fetch — summary_url is a dedicated sub-page route like h2h/standings
-        fetch_urls = getattr(self.page_source_fetcher, "fetch_urls", None)
-        if callable(fetch_urls):
-            items = [(r["key"], r["summary_url"]) for r in non_zero]
+        # Tab-clicking fetch — navigates to match_url and clicks the Summary tab
+        fetch_summary = getattr(self.page_source_fetcher, "fetch_summary_pages", None)
+        if callable(fetch_summary):
+            items = [(r["key"], r["match_url"]) for r in non_zero]
             try:
-                return fetch_urls(items)
+                return fetch_summary(items)
             except Exception:
                 return {}
         return {}
