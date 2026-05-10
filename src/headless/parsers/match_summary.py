@@ -78,18 +78,47 @@ def _split_half_score(score_str: str) -> tuple[str, str]:
     return (m.group(1).strip(), m.group(2).strip()) if m else ("", "")
 
 
+def parse_ft_score(html: str) -> tuple[str, str]:
+    """Parse full-time score from the match header (detailScore__wrapper) on the summary page."""
+    soup = BeautifulSoup(str(html or ""), "html.parser")
+    wrapper = soup.select_one(".detailScore__wrapper")
+    if not wrapper:
+        return "", ""
+    spans = [
+        s for s in wrapper.find_all("span", recursive=False)
+        if "divider" not in " ".join(s.get("class") or [])
+    ]
+    if len(spans) >= 2:
+        return spans[0].get_text(strip=True), spans[1].get_text(strip=True)
+    return "", ""
+
+
 def parse_match_summary(html: str) -> dict:
-    """Parse a rendered match summary page — returns halftime scores, goal events and rhythm."""
+    """Parse a rendered match summary page — returns halftime scores, FT score, goal events and rhythm."""
     half_scores = parse_half_scores(html)
     goals = parse_goal_events(html)
     h1, a1 = _split_half_score(half_scores.get("1st_half", ""))
     h2, a2 = _split_half_score(half_scores.get("2nd_half", ""))
+    ft_home, ft_away = parse_ft_score(html)
+    # Fallback: compute FT from halves when header score is absent
+    if not ft_home and h1 and h2:
+        try:
+            ft_home = str(int(h1) + int(h2))
+        except Exception:
+            pass
+    if not ft_away and a1 and a2:
+        try:
+            ft_away = str(int(a1) + int(a2))
+        except Exception:
+            pass
     rhythm = "".join(g.get("side", "") for g in goals if g.get("side") in {"H", "A"})
     return {
         "1h_home": h1,
         "1h_away": a1,
         "2h_home": h2,
         "2h_away": a2,
+        "ft_home": ft_home,
+        "ft_away": ft_away,
         "goal_rhythm": rhythm,
         "goal_events": goals,
     }

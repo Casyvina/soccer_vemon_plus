@@ -219,7 +219,9 @@ class AllOddsPipeline:
             raise ValueError(f"All odds file not found: {json_path}")
 
         payload = load_json(json_path)
-        candidates = list_halftime_score_candidates(payload, limit=limit)
+        candidates = list_halftime_score_candidates(
+            payload, limit=limit, date_iso=date_iso, buffer_hours=3
+        )
 
         processed = 0
         updated = 0
@@ -251,6 +253,8 @@ class AllOddsPipeline:
                     "1h_away": summary.get("1h_away"),
                     "2h_home": summary.get("2h_home"),
                     "2h_away": summary.get("2h_away"),
+                    "ft_home": summary.get("ft_home"),
+                    "ft_away": summary.get("ft_away"),
                 }
                 changed = upsert_scores_in_payload(payload, match_id, scores)
                 if changed:

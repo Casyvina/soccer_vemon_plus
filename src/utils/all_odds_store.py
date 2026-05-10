@@ -4,7 +4,7 @@ import numbers
 import re
 import time
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import urlparse, parse_qs
@@ -511,9 +511,15 @@ def list_halftime_score_candidates(
     payload: dict[str, Any],
     *,
     limit: int = 0,
+    date_iso: str = "",
+    buffer_hours: int = 3,
 ) -> list[dict[str, Any]]:
     """
-    Return matches that have full-time scores but are missing half-time scores.
+    Return past matches that are missing half-time scores.
+
+    Matches must have a URL and their kickoff + buffer_hours must be in the past
+    (so we don't try to fetch summary for a match not yet played).
+    Skips matches that already have both 1h_home and 1h_away.
 
     Each item: {"match_id", "url", "home", "away"}
     limit=0 means no cap.
@@ -522,23 +528,16 @@ def list_halftime_score_candidates(
     if not isinstance(matches, dict):
         return []
 
+    now = datetime.now()
+
     candidates: list[dict[str, Any]] = []
     for match_id, item in matches.items():
         if not isinstance(item, dict):
             continue
 
-        scores = item.get("scores")
-        if not isinstance(scores, dict):
-            continue
+        scores = item.get("scores") or {}
 
-        # Must have full-time scores
-        if (
-            _normalize_score_value(scores.get("ft_home")) is None
-            or _normalize_score_value(scores.get("ft_away")) is None
-        ):
-            continue
-
-        # Skip if half-time already present
+        # Skip if half-time already present (both sides)
         if (
             _normalize_score_value(scores.get("1h_home")) is not None
             and _normalize_score_value(scores.get("1h_away")) is not None
@@ -548,6 +547,12 @@ def list_halftime_score_candidates(
         url = str(item.get("url") or "").strip()
         if not url:
             continue
+
+        # Time-based eligibility: only process matches whose kickoff + buffer is in the past
+        if date_iso:
+            kickoff = _parse_kickoff_datetime(date_iso, str(item.get("time") or ""))
+            if kickoff is not None and now < kickoff + timedelta(hours=max(0, buffer_hours)):
+                continue
 
         candidates.append(
             {
@@ -562,6 +567,23 @@ def list_halftime_score_candidates(
             break
 
     return candidates
+
+
+def _parse_kickoff_datetime(date_iso: str, time_text: str) -> datetime | None:
+    try:
+        day = datetime.strptime(str(date_iso), "%Y-%m-%d")
+    except Exception:
+        return None
+    tt = str(time_text or "").strip()
+    if len(tt) == 5 and tt[2] == ":":
+        try:
+            hh, mm = int(tt[:2]), int(tt[3:5])
+            if 0 <= hh <= 23 and 0 <= mm <= 59:
+                return datetime(day.year, day.month, day.day, hh, mm, 0)
+        except Exception:
+            pass
+    # Unknown time — treat as end-of-day (conservative)
+    return datetime(day.year, day.month, day.day, 23, 59, 0)
 
 
 def start_details_attempt_in_payload(payload: dict[str, Any], match_id: str) -> bool:
