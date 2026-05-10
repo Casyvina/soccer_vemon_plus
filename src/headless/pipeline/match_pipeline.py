@@ -279,7 +279,7 @@ class MatchPipeline:
 
         for match_item in [
             m for m in (h2h_section.get("matches") or []) if isinstance(m, dict)
-        ][:3]:
+        ][:5]:
             match_url = str(match_item.get("url") or "").strip()
             match_id = extract_match_id(match_url)
             if not match_id:
