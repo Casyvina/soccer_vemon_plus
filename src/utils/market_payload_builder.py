@@ -189,15 +189,51 @@ def _build_weekly_rows(match: dict, team_name: str) -> list[dict]:
         status = _as_str(item.get("result")).upper()
         if status not in {"W", "D", "L"}:
             status = _compute_wdl_status(team_goals, opp_goals)
+        match_url = _as_str(item.get("url"))
+
+        # half_scores perspective: 1h_home = tracking team's goals, 1h_away = opponent's
+        half_scores = _safe_dict(item.get("half_scores"))
+        raw_rhythm = _as_str(half_scores.get("goal_rhythm")).upper()
+        goal_rhythm = raw_rhythm.replace("H", "T").replace("A", "O")
+
+        goal_events: list[dict] = []
+        for event_index, event in enumerate(_safe_list(half_scores.get("goal_events")), start=1):
+            event_data = _safe_dict(event)
+            raw_side = _as_str(event_data.get("side")).upper()
+            if raw_side not in {"H", "A"}:
+                continue
+            goal_events.append({
+                "index": event_index,
+                "side": "T" if raw_side == "H" else "O",
+                "minute": _as_str(event_data.get("minute")),
+                "scoreAfterGoal": _as_str(event_data.get("score_after_goal")),
+            })
+
+        half_time_available = bool(
+            half_scores.get("1h_home") or half_scores.get("1h_away")
+            or half_scores.get("2h_home") or half_scores.get("2h_away")
+        )
         rows.append(
             {
-                "event": _as_str(item.get("event")),
                 "area": "H" if is_home else "A",
-                "opponent": away if is_home else home,
-                "status": status,
                 "date": _as_str(item.get("date")),
+                "event": _as_str(item.get("event")),
+                "status": status,
+                "matchId": extract_match_id(match_url),
+                "matchUrl": match_url,
+                "opponent": away if is_home else home,
                 "teamGoals": team_goals,
                 "oppGoals": opp_goals,
+                "halfTimeAvailable": half_time_available,
+                "firstHalfTeam": _as_str(half_scores.get("1h_home")),
+                "firstHalfOpponent": _as_str(half_scores.get("1h_away")),
+                "secondHalfTeam": _as_str(half_scores.get("2h_home")),
+                "secondHalfOpponent": _as_str(half_scores.get("2h_away")),
+                "fullTimeTeam": _as_str(half_scores.get("ft_home")),
+                "fullTimeOpponent": _as_str(half_scores.get("ft_away")),
+                "goalRhythm": goal_rhythm,
+                "goalMinutes": [e["minute"] for e in goal_events if e.get("minute")],
+                "goalEvents": goal_events,
             }
         )
     return rows
@@ -272,8 +308,12 @@ def _build_boost(match: dict, team_name: str, weekly_rows: list[dict]) -> str:
 def _build_h2h_rows(
     match: dict, home_team: str, away_team: str, current_date: str, h2h_matches: list[dict]
 ) -> list[dict]:
+    current_url = _as_str(match.get("url"))
     rows: list[dict] = [
         {
+            "index": 0,
+            "matchId": extract_match_id(current_url),
+            "matchUrl": current_url,
             "event": "?",
             "area": "H",
             "status": "?",
@@ -283,11 +323,12 @@ def _build_h2h_rows(
         }
     ]
 
-    for item in h2h_matches:
+    for idx, item in enumerate(h2h_matches, start=1):
         home = _as_str(item.get("home"))
         away = _as_str(item.get("away"))
         score_home = _as_str(item.get("score_home"))
         score_away = _as_str(item.get("score_away"))
+        match_url = _as_str(item.get("url"))
 
         if home_team == home:
             area = "H"
@@ -302,8 +343,37 @@ def _build_h2h_rows(
             home_goals = ""
             away_goals = ""
 
+        rows.append(
+            {
+                "index": idx,
+                "matchId": extract_match_id(match_url),
+                "matchUrl": match_url,
+                "event": _as_str(item.get("event")),
+                "area": area,
+                "status": _match_winner_label(home, away, score_home, score_away),
+                "date": _as_str(item.get("date")),
+                "homeGoals": home_goals,
+                "awayGoals": away_goals,
+            }
+        )
+    return rows
+
+
+def _build_h2h_half_time_rows(h2h_matches: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for idx, item in enumerate(h2h_matches, start=1):
         half_scores = _safe_dict(item.get("half_scores"))
+        match_url = _as_str(item.get("url"))
+        match_id = extract_match_id(match_url)
+
+        first_half_home = _as_str(half_scores.get("1h_home"))
+        first_half_away = _as_str(half_scores.get("1h_away"))
+        second_half_home = _as_str(half_scores.get("2h_home"))
+        second_half_away = _as_str(half_scores.get("2h_away"))
+        full_time_home = _as_str(half_scores.get("ft_home"))
+        full_time_away = _as_str(half_scores.get("ft_away"))
         goal_rhythm = _as_str(half_scores.get("goal_rhythm")).upper()
+
         goal_events: list[dict] = []
         for event_index, event in enumerate(_safe_list(half_scores.get("goal_events")), start=1):
             event_data = _safe_dict(event)
@@ -317,23 +387,22 @@ def _build_h2h_rows(
                 "scoreAfterGoal": _as_str(event_data.get("score_after_goal")),
             })
 
-        rows.append(
-            {
-                "event": _as_str(item.get("event")),
-                "area": area,
-                "status": _match_winner_label(home, away, score_home, score_away),
-                "date": _as_str(item.get("date")),
-                "homeGoals": home_goals,
-                "awayGoals": away_goals,
-                "url": _as_str(item.get("url")),
-                "firstHalfHome": _as_str(half_scores.get("1h_home")),
-                "firstHalfAway": _as_str(half_scores.get("1h_away")),
-                "secondHalfHome": _as_str(half_scores.get("2h_home")),
-                "secondHalfAway": _as_str(half_scores.get("2h_away")),
-                "goalRhythm": goal_rhythm,
-                "goalEvents": goal_events,
-            }
-        )
+        available = bool(first_half_home or first_half_away or second_half_home or second_half_away)
+        rows.append({
+            "index": idx,
+            "matchId": match_id,
+            "matchUrl": match_url,
+            "available": available,
+            "firstHalfHome": first_half_home,
+            "firstHalfAway": first_half_away,
+            "secondHalfHome": second_half_home,
+            "secondHalfAway": second_half_away,
+            "fullTimeHome": full_time_home,
+            "fullTimeAway": full_time_away,
+            "goalRhythm": goal_rhythm,
+            "goalMinutes": [e["minute"] for e in goal_events if e.get("minute")],
+            "goalEvents": goal_events,
+        })
     return rows
 
 
@@ -463,6 +532,7 @@ def build_market_match(
 
     h2h_matches = _extract_head_to_head_matches(match)
     h2h_rows = _build_h2h_rows(match, home_team, away_team, current_date, h2h_matches)
+    h2h_half_time_rows = _build_h2h_half_time_rows(h2h_matches)
     standings_rows = [_build_current_standing_row(match)] + _build_h2h_standing_rows(
         match, home_team, h2h_matches
     )
@@ -509,6 +579,7 @@ def build_market_match(
         "h2h": {
             "currentDate": current_date,
             "rows": h2h_rows,
+            "halfTimeRows": h2h_half_time_rows,
         },
         "standings": standings_rows,
         "homeWeekly": home_weekly,
