@@ -203,12 +203,15 @@ class AllOddsPipeline:
         date_iso: str,
         *,
         limit: int = 0,
+        batch_size: int = 5,
         persist: bool = True,
     ) -> dict:
         """
-        For a given date, find matches with full-time scores but missing half-time,
-        visit each match summary page, parse half-time scores, update the JSON,
-        and optionally push to Supabase scores table.
+        For a given date, find past matches missing half-time scores, visit their
+        summary pages in parallel-tab batches, parse scores, update the JSON, and
+        optionally push to Supabase scores table.
+
+        batch_size: how many match summary tabs to open in parallel per round.
 
         Returns a summary dict:
           {"date_iso", "candidates", "processed", "updated", "failed", "skipped"}
@@ -226,6 +229,7 @@ class AllOddsPipeline:
         processed = 0
         updated = 0
         failed = 0
+        batch_size = max(1, int(batch_size or 5))
 
         fetch_summary = getattr(self.page_source_fetcher, "fetch_summary_pages", None)
         if not callable(fetch_summary):
@@ -239,40 +243,49 @@ class AllOddsPipeline:
                 "error": "page_source_fetcher does not support fetch_summary_pages",
             }
 
-        for candidate in candidates:
-            match_id = candidate["match_id"]
-            url = candidate["url"]
-            processed += 1
+        for batch_start in range(0, len(candidates), batch_size):
+            batch = candidates[batch_start: batch_start + batch_size]
+            items = [(c["match_id"], c["url"]) for c in batch]
             try:
-                pages = fetch_summary([(match_id, url)])
-                html = pages.get(match_id) or ""
-                summary = parse_match_summary(html)
-
-                scores = {
-                    "1h_home": summary.get("1h_home"),
-                    "1h_away": summary.get("1h_away"),
-                    "2h_home": summary.get("2h_home"),
-                    "2h_away": summary.get("2h_away"),
-                    "ft_home": summary.get("ft_home"),
-                    "ft_away": summary.get("ft_away"),
-                }
-                changed = upsert_scores_in_payload(payload, match_id, scores)
-                if changed:
-                    updated += 1
-
-                if self.supabase_manager:
-                    match_item = (payload.get("matches") or {}).get(match_id) or {}
-                    full_scores = (match_item.get("scores") or {})
-                    self.supabase_manager.upsert_score(
-                        match_id=match_id,
-                        date_iso=date_iso,
-                        url=url,
-                        home=str(candidate.get("home") or ""),
-                        away=str(candidate.get("away") or ""),
-                        scores=full_scores,
-                    )
+                pages = fetch_summary(items)
             except Exception:
-                failed += 1
+                failed += len(batch)
+                processed += len(batch)
+                continue
+
+            for candidate in batch:
+                match_id = candidate["match_id"]
+                url = candidate["url"]
+                processed += 1
+                try:
+                    html = pages.get(match_id) or ""
+                    summary = parse_match_summary(html)
+
+                    scores = {
+                        "1h_home": summary.get("1h_home"),
+                        "1h_away": summary.get("1h_away"),
+                        "2h_home": summary.get("2h_home"),
+                        "2h_away": summary.get("2h_away"),
+                        "ft_home": summary.get("ft_home"),
+                        "ft_away": summary.get("ft_away"),
+                    }
+                    changed = upsert_scores_in_payload(payload, match_id, scores)
+                    if changed:
+                        updated += 1
+
+                    if self.supabase_manager:
+                        match_item = (payload.get("matches") or {}).get(match_id) or {}
+                        full_scores = (match_item.get("scores") or {})
+                        self.supabase_manager.upsert_score(
+                            match_id=match_id,
+                            date_iso=date_iso,
+                            url=url,
+                            home=str(candidate.get("home") or ""),
+                            away=str(candidate.get("away") or ""),
+                            scores=full_scores,
+                        )
+                except Exception:
+                    failed += 1
 
         if persist and (updated or failed == 0):
             save_json(json_path, payload)
