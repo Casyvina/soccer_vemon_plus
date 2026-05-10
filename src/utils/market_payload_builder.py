@@ -356,6 +356,8 @@ def _build_h2h_standing_rows(
         match_url = _as_str(item.get("url"))
         match_id = extract_match_id(match_url)
         data = _safe_dict(standings_map.get(match_id))
+        if not data or int(data.get("total_rows") or 0) == 0:
+            continue
         home_data = data.get("home_team")
         away_data = data.get("away_team")
         home_data = _safe_dict(home_data) if isinstance(home_data, dict) else {}
