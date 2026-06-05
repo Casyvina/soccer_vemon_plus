@@ -12,7 +12,7 @@ def clean_team_name(name: str) -> str:
 def text_or_empty(node: Tag | None) -> str:
     if node is None:
         return ""
-    return node.get_text(" ", strip=True)
+    return re.sub(r"\s+", " ", node.get_text(" ", strip=True)).strip()
 
 
 def attr_or_empty(node: Tag | None, attr_name: str) -> str:
