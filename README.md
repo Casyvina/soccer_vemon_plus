@@ -401,19 +401,90 @@ Known constraint:
 - some historical H2H matches simply do not expose standings rows on Flashscore, so those entries fall back to `has_table: false`
 
 
-gcloud compute scp "c:/Users/Buyen/OneDrive/Desktop/Builds/Python/soccer_cloud/src/utils/all_odds_store.py" soccer-venom:/home/Buyen/soccer_cloud/src/utils/all_odds_store.py --zone=us-east1-c --project=project-57984f7f-29fc-40c3-b0e
+## VM deployment (Google Cloud)
 
+The daemon runs on a Google Cloud VM (`soccer-venom`, zone `us-east1-c`).
 
+### 1. SSH into the VM
 
+```bash
 gcloud compute ssh soccer-venom --zone=us-east1-c --project=project-57984f7f-29fc-40c3-b0e
+```
 
+### 2. Pull latest code
 
-sudo systemctl start soccer-daemon && tail -f ~/logs/daemon.log
+```bash
+cd ~/soccer_vemon_plus
+source .venv/bin/activate
+git pull
+```
 
-sudo systemctl restart soccer-daemon && tail -f ~/logs/daemon.log
+### 3. Start the daemon
 
-sudo systemctl stop soccer-daemon
-cd ~/soccer_cloud && .venv/bin/python src/headless_daemon.py --base-dir /home/Buyen/soccer_data 2>&1 | tee /tmp/daemon_manual.log
+```bash
+mkdir -p logs
+nohup python src/headless_daemon.py --browser chrome >> logs/daemon.log 2>&1 &
+echo "Daemon PID: $!"
+```
 
+### 4. Watch the logs
 
-tail -20 ~/logs/daemon.log && echo "---" && sudo systemctl status soccer-daemon --no-pager | grep "Active\|Memory\|CPU"
+```bash
+tail -f logs/daemon.log
+```
+
+Or check the last 100 lines:
+
+```bash
+tail -100 logs/daemon.log
+```
+
+### 5. Check if daemon is running
+
+```bash
+ps aux | grep headless_daemon
+```
+
+### 6. Stop the daemon
+
+```bash
+# Find the PID
+ps aux | grep headless_daemon
+
+# Kill it (replace <PID> with the number shown)
+kill <PID>
+```
+
+### 7. Restart the daemon (stop + start)
+
+```bash
+# Stop old process
+kill $(pgrep -f headless_daemon)
+
+# Start fresh
+nohup python src/headless_daemon.py --browser chrome >> logs/daemon.log 2>&1 &
+echo "Daemon PID: $!"
+tail -f logs/daemon.log
+```
+
+### 8. Manual one-off runs on the VM
+
+Fetch today's odds:
+
+```bash
+python src/headless_all_odds_cli.py --day 0 --browser chrome
+```
+
+Fetch match details for tomorrow (limit 3):
+
+```bash
+python src/headless_cli.py --all-odds-day 1 --limit 3 --rendered --browser chrome
+```
+
+Fetch half-time scores for a specific date (dry-run first):
+
+```bash
+python src/headless_score_cli.py --date 2026-05-08 --limit 10 --dry-run
+python src/headless_score_cli.py --date 2026-05-08 --limit 10 --batch-size 5 --browser chrome
+```
+
