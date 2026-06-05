@@ -488,3 +488,61 @@ python src/headless_score_cli.py --date 2026-05-08 --limit 10 --dry-run
 python src/headless_score_cli.py --date 2026-05-08 --limit 10 --batch-size 5 --browser chrome
 ```
 
+### 9. Reset and re-fetch match details for specific dates
+
+Use this when Flashscore does a site update and old fetched data needs to be refreshed.
+Only resets matches without a final score (safe — won't touch completed matches).
+
+Check status first:
+
+```bash
+python -c "
+import json
+from pathlib import Path
+for date in ['2026-06-05', '2026-06-06', '2026-06-07']:
+    path = Path(f'_headless_output/data/raw/all_odds/{date}.json')
+    if not path.exists():
+        print(f'{date}: NOT FOUND')
+        continue
+    data = json.loads(path.read_text())
+    matches = data.get('matches') or {}
+    fetched = sum(1 for m in matches.values() if m.get('details_fetched'))
+    has_ft = sum(1 for m in matches.values() if (m.get('scores') or {}).get('ft_home') is not None)
+    print(f'{date}: {len(matches)} matches | fetched={fetched} | complete={has_ft}')
+"
+```
+
+Reset non-complete matches (replace dates as needed):
+
+```bash
+python -c "
+import json
+from pathlib import Path
+for date in ['2026-06-05', '2026-06-06', '2026-06-07']:
+    path = Path(f'_headless_output/data/raw/all_odds/{date}.json')
+    if not path.exists():
+        print(f'{date}: NOT FOUND')
+        continue
+    data = json.loads(path.read_text())
+    reset = 0
+    for m in data['matches'].values():
+        scores = m.get('scores') or {}
+        if scores.get('ft_home') is None:
+            m['details_fetched'] = False
+            m['details_last_status'] = 'pending'
+            m['details_attempt_count'] = 0
+            reset += 1
+    path.write_text(json.dumps(data, indent=2, ensure_ascii=False))
+    print(f'{date}: reset {reset} matches')
+"
+```
+
+Then restart the daemon — it will pick up all reset matches automatically:
+
+```bash
+kill $(pgrep -f headless_daemon)
+nohup python src/headless_daemon.py --browser chrome >> logs/daemon.log 2>&1 &
+echo "Daemon PID: $!"
+tail -f logs/daemon.log
+```
+
