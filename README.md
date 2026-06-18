@@ -401,7 +401,7 @@ Known constraint:
 - some historical H2H matches simply do not expose standings rows on Flashscore, so those entries fall back to `has_table: false`
 
 
-## VM deployment (Google Cloud)
+r## VM deployment (Google Cloud)
 
 The daemon runs on a Google Cloud VM (`soccer-venom`, zone `us-east1-c`).
 
@@ -544,5 +544,83 @@ kill $(pgrep -f headless_daemon)
 nohup python src/headless_daemon.py --browser chrome >> logs/daemon.log 2>&1 &
 echo "Daemon PID: $!"
 tail -f logs/daemon.log
+```
+
+---
+
+## Oracle Cloud VM Setup (Always Free — ARM)
+
+### Instance specs
+- Shape: VM.Standard.A1.Flex — 4 OCPU, 24 GB RAM (free forever)
+- Image: Canonical Ubuntu 22.04 Minimal aarch64
+- Region: eu-amsterdam-1 (Amsterdam)
+
+### OCI CLI setup (Windows, one-time)
+
+```powershell
+# Install
+.\install.ps1  # from https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.ps1
+
+# Configure
+oci setup config
+# Region: eu-amsterdam-1 (option 25)
+# Generate new API key: yes
+# No passphrase: N/A
+
+# Add public key to Oracle Console:
+# Profile → API keys → Add API key → Paste public key
+Get-Content C:\Users\Buyen\.oci\oci_api_key_public.pem
+```
+
+### ARM capacity retry loop (PowerShell)
+
+Oracle free ARM instances are often at capacity. This loop retries every 60s until it succeeds.
+
+**Prerequisites — run once:**
+```powershell
+# Write shape config file
+[System.IO.File]::WriteAllText("C:\Users\Buyen\shapeconfig.json", '{"ocpus":4,"memoryInGBs":24}')
+
+# Generate SSH key for VM access
+ssh-keygen -t rsa -b 2048 -f C:\Users\Buyen\.ssh\oracle_vm -N '""'
+```
+
+**Retry loop:**
+```powershell
+$compartment = "ocid1.tenancy.oc1..aaaaaaaaybchlxrsvs7t3qvudggpnqa5656ewpoyilnijm6lzn2yhc6yb2ka"
+$subnet      = "ocid1.subnet.oc1.eu-amsterdam-1.aaaaaaaadp3kyvxq2llw4haps7qaevym64nq7bpgbvgicvn4l62nbe3h2wva"
+$image       = "ocid1.image.oc1.eu-amsterdam-1.aaaaaaaa63dzwtxvmrkhzqzzhamsvbpiqaosdax4n5wep3s4pli4bxklcoja"
+
+while ($true) {
+    Write-Host "Trying at $(Get-Date)..."
+    $result = oci compute instance launch `
+        --availability-domain "ZJvY:eu-amsterdam-1-AD-1" `
+        --compartment-id $compartment `
+        --shape "VM.Standard.A1.Flex" `
+        --shape-config "file://C:/Users/Buyen/shapeconfig.json" `
+        --image-id $image `
+        --subnet-id $subnet `
+        --assign-public-ip true `
+        --display-name "soccer-venom" `
+        --ssh-authorized-keys-file "C:\Users\Buyen\.ssh\oracle_vm.pub" `
+        --boot-volume-size-in-gbs 50 `
+        --query "data.id" --raw-output 2>&1
+    if ($LASTEXITCODE -eq 0) {
+        Write-Host "SUCCESS: $result"
+        break
+    }
+    Write-Host "Failed: $result"
+    Start-Sleep -Seconds 60
+}
+```
+
+When it succeeds, get the public IP:
+```powershell
+oci compute instance list-vnics --instance-id <instance-ocid> --query "data[0].\"public-ip\"" --raw-output
+```
+
+SSH in:
+```bash
+ssh -i C:\Users\Buyen\.ssh\oracle_vm ubuntu@<public-ip>
 ```
 
