@@ -199,13 +199,24 @@ Today:
 
 ```powershell
 .\.venv\Scripts\python.exe src\headless_all_odds_cli.py --browser chrome --day 0
+
+python src/headless_all_odds_cli.py --browser chrome --day 0
+
+python src/headless_cli.py --rendered --browser chrome --all-odds-date 2026-06-20
+
 ```
 
 Tomorrow:
 
 ```powershell
 .\.venv\Scripts\python.exe src\headless_all_odds_cli.py --browser chrome --day 1
+
+python src/headless_all_odds_cli.py --browser chrome --day 1
+
+python src/headless_cli.py --rendered --browser chrome --all-odds-date 2026-06-21
+
 ```
+
 
 Multiple days in one browser session:
 
@@ -401,14 +412,19 @@ Known constraint:
 - some historical H2H matches simply do not expose standings rows on Flashscore, so those entries fall back to `has_table: false`
 
 
-r## VM deployment (Google Cloud)
+## VM deployment (Hetzner)
 
-The daemon runs on a Google Cloud VM (`soccer-venom`, zone `us-east1-c`).
+The daemon runs on a Hetzner CX23 VM (`soccer-venom`, Helsinki).
+
+- **IP:** 77.42.70.63
+- **Specs:** 2 vCPU (x86 AMD), 4 GB RAM, 40 GB SSD, Ubuntu 22.04
+- **Cost:** ~$7.09/month (server + IPv4)
+- **SSH key:** `C:\Users\Buyen\.ssh\oracle_vm`
 
 ### 1. SSH into the VM
 
-```bash
-gcloud compute ssh soccer-venom --zone=us-east1-c --project=project-57984f7f-29fc-40c3-b0e
+```powershell
+ssh -i C:\Users\Buyen\.ssh\oracle_vm root@77.42.70.63
 ```
 
 ### 2. Pull latest code
@@ -548,79 +564,73 @@ tail -f logs/daemon.log
 
 ---
 
-## Oracle Cloud VM Setup (Always Free — ARM)
+## Hetzner VM — initial server setup (one-time)
 
-### Instance specs
-- Shape: VM.Standard.A1.Flex — 4 OCPU, 24 GB RAM (free forever)
-- Image: Canonical Ubuntu 22.04 Minimal aarch64
-- Region: eu-amsterdam-1 (Amsterdam)
+Use this if you need to rebuild the server from scratch.
 
-### OCI CLI setup (Windows, one-time)
+### 1. Create server on Hetzner
+
+1. Go to [console.hetzner.cloud](https://console.hetzner.cloud)
+2. Open project `soccer` → **Add Server**
+3. Settings:
+   - Location: **Helsinki**
+   - Image: **Ubuntu 22.04**
+   - Type: Shared AMD → **CX23** (2 vCPU, 4 GB RAM — ~$6.49/month)
+   - SSH key: add your public key (`C:\Users\Buyen\.ssh\oracle_vm.pub`)
+4. Click **Create & Buy Now**
+
+### 2. Generate SSH key (if needed)
 
 ```powershell
-# Install
-.\install.ps1  # from https://raw.githubusercontent.com/oracle/oci-cli/master/scripts/install/install.ps1
-
-# Configure
-oci setup config
-# Region: eu-amsterdam-1 (option 25)
-# Generate new API key: yes
-# No passphrase: N/A
-
-# Add public key to Oracle Console:
-# Profile → API keys → Add API key → Paste public key
-Get-Content C:\Users\Buyen\.oci\oci_api_key_public.pem
-```
-
-### ARM capacity retry loop (PowerShell)
-
-Oracle free ARM instances are often at capacity. This loop retries every 60s until it succeeds.
-
-**Prerequisites — run once:**
-```powershell
-# Write shape config file
-[System.IO.File]::WriteAllText("C:\Users\Buyen\shapeconfig.json", '{"ocpus":4,"memoryInGBs":24}')
-
-# Generate SSH key for VM access
 ssh-keygen -t rsa -b 2048 -f C:\Users\Buyen\.ssh\oracle_vm -N '""'
+# Public key to paste into Hetzner:
+Get-Content C:\Users\Buyen\.ssh\oracle_vm.pub
 ```
 
-**Retry loop:**
-```powershell
-$compartment = "ocid1.tenancy.oc1..aaaaaaaaybchlxrsvs7t3qvudggpnqa5656ewpoyilnijm6lzn2yhc6yb2ka"
-$subnet      = "ocid1.subnet.oc1.eu-amsterdam-1.aaaaaaaadp3kyvxq2llw4haps7qaevym64nq7bpgbvgicvn4l62nbe3h2wva"
-$image       = "ocid1.image.oc1.eu-amsterdam-1.aaaaaaaa63dzwtxvmrkhzqzzhamsvbpiqaosdax4n5wep3s4pli4bxklcoja"
+### 3. Install system dependencies
 
-while ($true) {
-    Write-Host "Trying at $(Get-Date)..."
-    $result = oci compute instance launch `
-        --availability-domain "ZJvY:eu-amsterdam-1-AD-1" `
-        --compartment-id $compartment `
-        --shape "VM.Standard.A1.Flex" `
-        --shape-config "file://C:/Users/Buyen/shapeconfig.json" `
-        --image-id $image `
-        --subnet-id $subnet `
-        --assign-public-ip true `
-        --display-name "soccer-venom" `
-        --ssh-authorized-keys-file "C:\Users\Buyen\.ssh\oracle_vm.pub" `
-        --boot-volume-size-in-gbs 50 `
-        --query "data.id" --raw-output 2>&1
-    if ($LASTEXITCODE -eq 0) {
-        Write-Host "SUCCESS: $result"
-        break
-    }
-    Write-Host "Failed: $result"
-    Start-Sleep -Seconds 60
-}
-```
-
-When it succeeds, get the public IP:
-```powershell
-oci compute instance list-vnics --instance-id <instance-ocid> --query "data[0].\"public-ip\"" --raw-output
-```
-
-SSH in:
 ```bash
-ssh -i C:\Users\Buyen\.ssh\oracle_vm ubuntu@<public-ip>
+apt update && apt upgrade -y
+apt install -y python3 python3-pip python3-venv git curl unzip wget gnupg ca-certificates
 ```
+
+### 4. Install Google Chrome
+
+```bash
+wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | gpg --dearmor -o /usr/share/keyrings/google-chrome.gpg
+echo "deb [arch=amd64 signed-by=/usr/share/keyrings/google-chrome.gpg] http://dl.google.com/linux/chrome/deb/ stable main" > /etc/apt/sources.list.d/google-chrome.list
+apt update && apt install -y google-chrome-stable
+google-chrome --version
+```
+
+### 5. Clone repo and set up Python environment
+
+```bash
+cd ~
+git clone https://github.com/YOUR_GITHUB_USERNAME/soccer_vemon_plus.git
+cd soccer_vemon_plus
+python3 -m venv .venv
+source .venv/bin/activate
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+### 6. Configure environment
+
+```bash
+cat > src/assets/.env << 'EOF'
+SUPABASE_URL_LF=your_supabase_url_here
+SUPABASE_SERVICE_KEY_LF=your_supabase_service_key_here
+EOF
+```
+
+Supabase credentials: project → **Settings → API** → Project URL + service_role key.
+
+### 7. Test before starting daemon
+
+```bash
+python src/headless_all_odds_cli.py --browser chrome --day 0 --no-save-html
+```
+
+Should print `Supabase client initialized` and `X matches` parsed. If that works, start the daemon.
 
