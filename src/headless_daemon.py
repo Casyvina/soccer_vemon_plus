@@ -127,9 +127,12 @@ class VmDaemon:
         if not self._get_pending_detail_dates():
             self._run_ht_phase()
 
-        # Phase 4 — Match alerts
+        # Phase 4 — Match alerts (30-min pre-kick, all matches)
         if self.lf_notifier.configured or self.ntfy_notifier.configured:
             self._run_alert_phase()
+
+        # Phase 4b — Kick-off alerts (favourited matches only)
+        self._run_kickoff_alert_phase()
 
         # Sleep — wake early if an alert window is approaching
         sleep_secs = self._seconds_until_next_trigger(datetime.now())
@@ -433,6 +436,97 @@ class VmDaemon:
             cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
             self._state["alerts_sent"] = {
                 d: v for d, v in self._state["alerts_sent"].items() if d >= cutoff
+            }
+            self._save_state()
+
+    # ── phase 4b: kick-off alerts for favourited matches ─────────────────────
+
+    def _run_kickoff_alert_phase(self) -> None:
+        """
+        Fires a 'match has kicked off' alert for any favourited match that just
+        went live. Checks once per daemon cycle; fires at most once per match.
+        Requires Supabase access (to query favourited_matches table).
+        """
+        if not self.supabase_manager.client:
+            return
+
+        notifier_ready = self.lf_notifier.configured or self.ntfy_notifier.configured
+        if not notifier_ready:
+            return
+
+        today = datetime.now().strftime("%Y-%m-%d")
+        all_odds_dir = resolve_all_odds_dir(self.config)
+        path = all_odds_dir / f"{today}.json"
+        if not path.exists():
+            return
+
+        payload = load_json(path)
+        matches = payload.get("matches") or {}
+        if not matches:
+            return
+
+        kickoff_alerted: set[str] = set(
+            self._state.get("kickoff_alerts_sent", {}).get(today, [])
+        )
+        new_kickoff_alerts: list[str] = []
+
+        try:
+            fav_res = (
+                self.supabase_manager.client
+                .from_("favourited_matches")
+                .select("match_id,home_team,away_team,competition")
+                .eq("day_id", today)
+                .execute()
+            )
+            favourites = fav_res.data or []
+        except Exception as exc:
+            _log("warn", f"Kick-off alert: failed to fetch favourites: {exc}")
+            return
+
+        for fav in favourites:
+            match_id = str(fav.get("match_id") or "").strip()
+            if not match_id or match_id in kickoff_alerted:
+                continue
+
+            m = matches.get(match_id)
+            if not m:
+                continue
+
+            status = str(m.get("status") or "").strip().lower()
+            # Live statuses vary by source — catch common variants
+            is_live = status in (
+                "in progress", "live", "1st half", "2nd half", "halftime",
+                "half time", "ht", "in-progress", "inprogress",
+            ) or (status.startswith("'") and status[1:].isdigit())  # e.g. '23
+
+            if not is_live:
+                continue
+
+            home = str(fav.get("home_team") or m.get("home") or "?")
+            away = str(fav.get("away_team") or m.get("away") or "?")
+            competition = str(fav.get("competition") or m.get("competition") or "")
+
+            title = f"{home} vs {away} has kicked off"
+            body = competition if competition else "Match is live"
+
+            if self.lf_notifier.configured:
+                ok = self.lf_notifier.send(title, body, tag="lf-kickoff")
+            else:
+                ok = self.ntfy_notifier.send(title, body, priority="high", tags=["soccer", "bell"])
+
+            if ok:
+                new_kickoff_alerts.append(match_id)
+                _log("info", f"Kick-off alert: {home} vs {away}")
+            else:
+                _log("warn", f"Kick-off alert failed: {match_id}")
+
+        if new_kickoff_alerts:
+            self._state.setdefault("kickoff_alerts_sent", {})
+            existing = self._state["kickoff_alerts_sent"].get(today, [])
+            self._state["kickoff_alerts_sent"][today] = list(set(existing + new_kickoff_alerts))
+            cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            self._state["kickoff_alerts_sent"] = {
+                d: v for d, v in self._state["kickoff_alerts_sent"].items() if d >= cutoff
             }
             self._save_state()
 
