@@ -446,12 +446,13 @@ nohup .venv/bin/python src/headless_daemon.py --browser chrome >> logs/daemon.lo
 echo "Daemon PID: $!"
 ```
 
-With ntfy push alerts (recommended — see ntfy setup below):
+With LeagueFlux Web Push alerts (recommended):
 
 ```bash
 mkdir -p logs
 nohup .venv/bin/python src/headless_daemon.py --browser chrome \
-  --ntfy-url http://localhost/leagueflux-alerts \
+  --leagueflux-url https://leagueflux.com \
+  --leagueflux-notify-secret YOUR_NOTIFICATION_API_SECRET \
   --idle-sleep-mins 15 >> logs/daemon.log 2>&1 &
 echo "Daemon PID: $!"
 ```
@@ -567,7 +568,8 @@ Then restart the daemon — it will pick up all reset matches automatically:
 ```bash
 kill $(pgrep -f headless_daemon)
 nohup .venv/bin/python src/headless_daemon.py --browser chrome \
-  --ntfy-url http://localhost/leagueflux-alerts \
+  --leagueflux-url https://leagueflux.com \
+  --leagueflux-notify-secret YOUR_NOTIFICATION_API_SECRET \
   --idle-sleep-mins 15 >> logs/daemon.log 2>&1 &
 echo "Daemon PID: $!"
 tail -f logs/daemon.log
@@ -575,60 +577,77 @@ tail -f logs/daemon.log
 
 ---
 
-## Push notifications (ntfy.sh)
+## Push notifications (Web Push — LeagueFlux native)
 
-The daemon sends match alerts to your phone ~30 minutes before kick-off. Each alert includes the signal combo (e.g. `O|AR|H`) and the FH-X2/1X vault rate pulled from Supabase.
+The daemon sends match alerts to your phone ~30 minutes before kick-off. Each alert appears branded as **LeagueFlux** — tap it to open `/app/markets` directly. No third-party app needed.
 
-Uses [ntfy.sh](https://ntfy.sh) — a free public notification service. No server setup or SSL needed. iOS and Android both work out of the box.
-
-> **Topic name = your password.** Pick something hard to guess (e.g. `lf-signals-j7x3`). Anyone who knows the topic can subscribe or post to it.
+This uses Web Push (PWA): the browser's built-in notification infrastructure, completely free. Works on iOS (Safari 16.4+, must "Add to Home Screen") and Android/desktop browsers.
 
 ### How it works
 
-- Daemon Phase 4 scans today's all_odds for matches kicking off in the next 20–45 minutes
-- Looks up the signal code and vault stats from `market_matches` + `signal_vault_master` in Supabase
-- Posts a push notification to `https://ntfy.sh/YOUR-TOPIC`
-- Tracks sent alerts in `daemon_state.json` — never fires twice for the same match
+1. You open LeagueFlux in Safari → Add to Home Screen
+2. Open the app → tap the bell icon in the toolbar → "Allow"
+3. Browser subscription is stored in Supabase `push_subscriptions`
+4. Daemon Phase 4 scans today's all_odds for matches kicking off in the next 20–45 minutes
+5. Looks up signal code + vault stats from `market_matches` + `signal_vault_master`
+6. POSTs to `https://leagueflux.com/api/notifications/send` with the shared secret
+7. Vercel sends the Web Push to all active browser subscriptions
+8. Tracks sent alerts in `daemon_state.json` — never fires twice for the same match
 
 ### Setup (one-time)
 
-**1. Start the daemon with your topic:**
+**1. Add `NOTIFICATION_API_SECRET` to Vercel** (any strong random string):
+
+```bash
+openssl rand -hex 32
+```
+
+Set it in the Vercel dashboard → Project → Settings → Environment Variables.
+
+**2. Run the Supabase migration** (in the `league-flux` repo):
+
+```sql
+-- Run supabase/migrations/push_subscriptions.sql in the Supabase SQL editor
+```
+
+**3. Start the daemon with LeagueFlux credentials:**
 
 ```bash
 kill $(pgrep -f headless_daemon)
 
 nohup .venv/bin/python src/headless_daemon.py --browser chrome \
-  --ntfy-url https://ntfy.sh/YOUR-TOPIC-HERE \
+  --leagueflux-url https://leagueflux.com \
+  --leagueflux-notify-secret YOUR_NOTIFICATION_API_SECRET \
   --idle-sleep-mins 15 >> logs/daemon.log 2>&1 &
 
 echo "Daemon PID: $!"
 tail -f logs/daemon.log
 ```
 
-**2. Subscribe on your phone:**
+**4. Subscribe on your phone:**
 
-- Install the **ntfy** app (Android: Play Store · iOS: App Store)
-- Open app → tap `+`
-- Server: `ntfy.sh` (leave as default)
-- Topic: `YOUR-TOPIC-HERE`
-- Subscribe
+- Open LeagueFlux in Safari → Share → Add to Home Screen
+- Open the app from Home Screen
+- Tap the bell icon in the MarketView toolbar
+- Allow notifications when prompted
 
-**3. Test it works:**
+**5. Test the endpoint manually:**
 
 ```bash
-curl -d "Test from LeagueFlux daemon" \
-  -H "Title: Test Alert" \
-  https://ntfy.sh/YOUR-TOPIC-HERE
+curl -s -X POST https://leagueflux.com/api/notifications/send \
+  -H "Authorization: Bearer YOUR_NOTIFICATION_API_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"title":"Test","body":"Daemon is live","url":"/app/markets"}'
 ```
-
-Notification should appear on your phone within seconds.
 
 ### Daemon alert flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--ntfy-url` | _(none)_ | Full ntfy topic URL e.g. `https://ntfy.sh/your-topic`. Also reads `NTFY_URL` env var. Omit to disable alerts. |
-| `--ntfy-token` | _(none)_ | Bearer token if using a private ntfy.sh account. Also reads `NTFY_TOKEN` env var. |
+| `--leagueflux-url` | _(none)_ | LeagueFlux base URL e.g. `https://leagueflux.com`. Also reads `LEAGUEFLUX_URL` env var. Primary alert path. |
+| `--leagueflux-notify-secret` | _(none)_ | Shared secret matching `NOTIFICATION_API_SECRET` on Vercel. Also reads `LEAGUEFLUX_NOTIFY_SECRET` env var. |
+| `--ntfy-url` | _(none)_ | ntfy fallback (testing only). Also reads `NTFY_URL` env var. |
+| `--ntfy-token` | _(none)_ | ntfy bearer token. Also reads `NTFY_TOKEN` env var. |
 | `--alert-lead-mins` | `30` | How many minutes before kick-off to fire the alert. |
 | `--idle-sleep-mins` | `30` | Use `15` when alerts are enabled so the daemon wakes before alert windows. |
 
@@ -638,6 +657,8 @@ Notification should appear on your phone within seconds.
 Arsenal vs Chelsea in 28min
 Premier League · 1.85/4.20 · O|AR|H · FH-X2 74% (31m)
 ```
+
+> Tap → opens `/app/markets` in the LeagueFlux PWA.
 
 ---
 

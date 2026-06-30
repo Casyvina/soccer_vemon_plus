@@ -39,7 +39,7 @@ from utils.all_odds_store import (
 )
 from utils.env_loader import load_env_from_assets
 from utils.market_payload_builder import _format_market_day_label, build_market_match
-from utils.notifier import NtfyNotifier
+from utils.notifier import LeagueFluxNotifier, NtfyNotifier
 from utils.paths import ensure_app_dirs, resolve_all_odds_dir
 from utils.signal_derive import combo_key, derive_signal_code, signal_complete
 
@@ -70,6 +70,8 @@ class VmDaemon:
         detail_max_attempts: int = 3,
         ht_lookback_days: int = 7,
         browser: str | None = None,
+        leagueflux_url: str = "",
+        leagueflux_notify_secret: str = "",
         ntfy_url: str = "",
         ntfy_token: str = "",
         alert_lead_mins: int = 30,
@@ -86,8 +88,9 @@ class VmDaemon:
         self.supabase_manager = SupabaseManager(config=config)
         self._state_path = base_dir / "daemon_state.json"
         self._state: dict = self._load_state()
-        # Alerts
-        self.notifier = NtfyNotifier(url=ntfy_url, token=ntfy_token)
+        # Alerts — LeagueFlux Web Push is primary; ntfy is fallback/testing
+        self.lf_notifier = LeagueFluxNotifier(base_url=leagueflux_url, secret=leagueflux_notify_secret)
+        self.ntfy_notifier = NtfyNotifier(url=ntfy_url, token=ntfy_token)
         self.alert_lead_mins = max(5, alert_lead_mins)  # fire this many minutes before kick-off
 
     # ── public ────────────────────────────────────────────────────────────────
@@ -124,8 +127,8 @@ class VmDaemon:
         if not self._get_pending_detail_dates():
             self._run_ht_phase()
 
-        # Phase 4 — Match alerts (ntfy)
-        if self.notifier.configured:
+        # Phase 4 — Match alerts
+        if self.lf_notifier.configured or self.ntfy_notifier.configured:
             self._run_alert_phase()
 
         # Sleep — wake early if an alert window is approaching
@@ -410,7 +413,12 @@ class VmDaemon:
             title = f"{home} vs {away} {mins_label}"
             body = f"{competition}{odds_text}{signal_text}{fh_text}"
 
-            ok = self.notifier.send(title, body, priority="high", tags=["soccer"])
+            # Try LeagueFlux Web Push first; fall back to ntfy
+            if self.lf_notifier.configured:
+                ok = self.lf_notifier.send(title, body)
+            else:
+                ok = self.ntfy_notifier.send(title, body, priority="high", tags=["soccer"])
+
             if ok:
                 new_alerts.append(match_id)
                 _log("info", f"Alert sent: {home} vs {away} {mins_label}{signal_text}{fh_text}")
@@ -442,7 +450,7 @@ class VmDaemon:
                 pass
 
         # Wake early if an alert window is approaching for today's matches
-        if self.notifier.configured:
+        if self.lf_notifier.configured or self.ntfy_notifier.configured:
             alert_wake = self._seconds_until_next_alert_window(now)
             if alert_wake is not None:
                 earliest = min(earliest, alert_wake)
@@ -559,17 +567,27 @@ def build_parser() -> argparse.ArgumentParser:
         help="Override the data root. Defaults to _headless_output in the current directory.",
     )
     parser.add_argument(
-        "--ntfy-url",
+        "--leagueflux-url",
         default="",
         help=(
-            "ntfy topic URL to send match alerts to, e.g. http://localhost/leagueflux-alerts. "
-            "Falls back to NTFY_URL env var. Omit to disable alerts."
+            "LeagueFlux base URL, e.g. https://leagueflux.com. "
+            "Falls back to LEAGUEFLUX_URL env var. When set, alerts go via Web Push."
         ),
+    )
+    parser.add_argument(
+        "--leagueflux-notify-secret",
+        default="",
+        help="Shared secret for /api/notifications/send (NOTIFICATION_API_SECRET on Vercel). Falls back to LEAGUEFLUX_NOTIFY_SECRET env var.",
+    )
+    parser.add_argument(
+        "--ntfy-url",
+        default="",
+        help="ntfy topic URL (fallback / testing). Falls back to NTFY_URL env var.",
     )
     parser.add_argument(
         "--ntfy-token",
         default="",
-        help="Bearer token for the ntfy server (if access control is enabled). Falls back to NTFY_TOKEN env var.",
+        help="Bearer token for ntfy server. Falls back to NTFY_TOKEN env var.",
     )
     parser.add_argument(
         "--alert-lead-mins",
@@ -609,6 +627,8 @@ def main(argv: list[str] | None = None) -> int:
         detail_max_attempts=args.detail_max_attempts,
         ht_lookback_days=args.ht_lookback_days,
         browser=args.browser,
+        leagueflux_url=args.leagueflux_url,
+        leagueflux_notify_secret=args.leagueflux_notify_secret,
         ntfy_url=args.ntfy_url,
         ntfy_token=args.ntfy_token,
         alert_lead_mins=args.alert_lead_mins,

@@ -1,19 +1,51 @@
 """
-ntfy push notification sender.
+Push notification senders.
 
-Usage:
-    notifier = NtfyNotifier(url="http://localhost/leagueflux-alerts", token="secret")
-    notifier.send("Match starting", "Arsenal vs Chelsea in 28min · Signal O|AR|H · FH-X2 74%")
+LeagueFluxNotifier (primary): POSTs to LeagueFlux /api/notifications/send,
+which fans out to all subscribed browsers via Web Push. This is the preferred
+path — notifications appear branded as LeagueFlux and tap-open the app.
+
+NtfyNotifier (fallback): legacy ntfy.sh integration kept for local testing.
 
 Configure via env vars or pass directly:
-    NTFY_URL   — full topic URL e.g. http://77.42.70.63/leagueflux-alerts
-    NTFY_TOKEN — optional bearer token (set in ntfy server config)
+    LEAGUEFLUX_URL            — LeagueFlux base URL, e.g. https://leagueflux.com
+    LEAGUEFLUX_NOTIFY_SECRET  — Bearer token matching NOTIFICATION_API_SECRET on Vercel
+    NTFY_URL                  — ntfy topic URL (fallback / testing only)
+    NTFY_TOKEN                — ntfy bearer token
 """
 from __future__ import annotations
 
 import os
 
 import requests
+
+
+class LeagueFluxNotifier:
+    def __init__(self, base_url: str = "", secret: str = ""):
+        base = (base_url or os.getenv("LEAGUEFLUX_URL") or "").rstrip("/")
+        self.endpoint = f"{base}/api/notifications/send" if base else ""
+        self.secret = secret or os.getenv("LEAGUEFLUX_NOTIFY_SECRET") or ""
+
+    @property
+    def configured(self) -> bool:
+        return bool(self.endpoint and self.secret)
+
+    def send(self, title: str, body: str, *, url: str = "/app/markets", tag: str = "lf-alert") -> bool:
+        if not self.configured:
+            return False
+        try:
+            resp = requests.post(
+                self.endpoint,
+                json={"title": title, "body": body, "url": url, "tag": tag},
+                headers={
+                    "Authorization": f"Bearer {self.secret}",
+                    "Content-Type": "application/json",
+                },
+                timeout=10,
+            )
+            return resp.status_code < 300
+        except Exception:
+            return False
 
 
 class NtfyNotifier:
