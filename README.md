@@ -421,6 +421,8 @@ The daemon runs on a Hetzner CX23 VM (`soccer-venom`, Helsinki).
 - **Cost:** ~$7.09/month (server + IPv4)
 - **SSH key:** `C:\Users\Buyen\.ssh\oracle_vm`
 
+> **Always use `.venv/bin/python`** on the VM — never bare `python`. `nohup` does not carry an activated venv.
+
 ### 1. SSH into the VM
 
 ```powershell
@@ -431,15 +433,26 @@ ssh -i C:\Users\Buyen\.ssh\oracle_vm root@77.42.70.63
 
 ```bash
 cd ~/soccer_vemon_plus
-source .venv/bin/activate
 git pull
 ```
 
 ### 3. Start the daemon
 
+Without alerts:
+
 ```bash
 mkdir -p logs
-nohup python src/headless_daemon.py --browser chrome >> logs/daemon.log 2>&1 &
+nohup .venv/bin/python src/headless_daemon.py --browser chrome >> logs/daemon.log 2>&1 &
+echo "Daemon PID: $!"
+```
+
+With ntfy push alerts (recommended — see ntfy setup below):
+
+```bash
+mkdir -p logs
+nohup .venv/bin/python src/headless_daemon.py --browser chrome \
+  --ntfy-url http://localhost/leagueflux-alerts \
+  --idle-sleep-mins 15 >> logs/daemon.log 2>&1 &
 echo "Daemon PID: $!"
 ```
 
@@ -464,21 +477,17 @@ ps aux | grep headless_daemon
 ### 6. Stop the daemon
 
 ```bash
-# Find the PID
-ps aux | grep headless_daemon
-
-# Kill it (replace <PID> with the number shown)
-kill <PID>
+kill $(pgrep -f headless_daemon)
 ```
 
 ### 7. Restart the daemon (stop + start)
 
 ```bash
-# Stop old process
 kill $(pgrep -f headless_daemon)
 
-# Start fresh
-nohup python src/headless_daemon.py --browser chrome >> logs/daemon.log 2>&1 &
+nohup .venv/bin/python src/headless_daemon.py --browser chrome \
+  --ntfy-url http://localhost/leagueflux-alerts \
+  --idle-sleep-mins 15 >> logs/daemon.log 2>&1 &
 echo "Daemon PID: $!"
 tail -f logs/daemon.log
 ```
@@ -488,20 +497,20 @@ tail -f logs/daemon.log
 Fetch today's odds:
 
 ```bash
-python src/headless_all_odds_cli.py --day 0 --browser chrome
+.venv/bin/python src/headless_all_odds_cli.py --day 0 --browser chrome
 ```
 
 Fetch match details for tomorrow (limit 3):
 
 ```bash
-python src/headless_cli.py --all-odds-day 1 --limit 3 --rendered --browser chrome
+.venv/bin/python src/headless_cli.py --all-odds-day 1 --limit 3 --rendered --browser chrome
 ```
 
 Fetch half-time scores for a specific date (dry-run first):
 
 ```bash
-python src/headless_score_cli.py --date 2026-05-08 --limit 10 --dry-run
-python src/headless_score_cli.py --date 2026-05-08 --limit 10 --batch-size 5 --browser chrome
+.venv/bin/python src/headless_score_cli.py --date 2026-05-08 --limit 10 --dry-run
+.venv/bin/python src/headless_score_cli.py --date 2026-05-08 --limit 10 --batch-size 5 --browser chrome
 ```
 
 ### 9. Reset and re-fetch match details for specific dates
@@ -512,7 +521,7 @@ Only resets matches without a final score (safe — won't touch completed matche
 Check status first:
 
 ```bash
-python -c "
+.venv/bin/python -c "
 import json
 from pathlib import Path
 for date in ['2026-06-05', '2026-06-06', '2026-06-07']:
@@ -531,7 +540,7 @@ for date in ['2026-06-05', '2026-06-06', '2026-06-07']:
 Reset non-complete matches (replace dates as needed):
 
 ```bash
-python -c "
+.venv/bin/python -c "
 import json
 from pathlib import Path
 for date in ['2026-06-05', '2026-06-06', '2026-06-07']:
@@ -557,9 +566,69 @@ Then restart the daemon — it will pick up all reset matches automatically:
 
 ```bash
 kill $(pgrep -f headless_daemon)
-nohup python src/headless_daemon.py --browser chrome >> logs/daemon.log 2>&1 &
+nohup .venv/bin/python src/headless_daemon.py --browser chrome \
+  --ntfy-url http://localhost/leagueflux-alerts \
+  --idle-sleep-mins 15 >> logs/daemon.log 2>&1 &
 echo "Daemon PID: $!"
 tail -f logs/daemon.log
+```
+
+---
+
+## Push notifications (ntfy)
+
+The daemon sends match alerts to your phone ~30 minutes before kick-off. Each alert includes the signal combo (e.g. `O|AR|H`) and the FH-X2/1X vault rate pulled from Supabase.
+
+### How it works
+
+- Daemon Phase 4 scans today's all_odds for matches kicking off in the next 20–45 minutes
+- Looks up the signal code and vault stats from `market_matches` + `signal_vault_master` in Supabase
+- Fires a push notification via ntfy running on the same VM
+- Tracks sent alerts in `daemon_state.json` — never fires twice for the same match
+
+### Install ntfy on the VM (one-time)
+
+```bash
+apt install -y docker.io
+systemctl enable --now docker
+
+docker run -d --name ntfy --restart unless-stopped -p 80:80 \
+  -v /opt/ntfy:/var/cache/ntfy \
+  binwiederhier/ntfy serve --cache-file /var/cache/ntfy/cache.db
+
+# Verify
+docker ps
+curl -s http://localhost/leagueflux-alerts/json?poll=1
+```
+
+### Subscribe on your phone
+
+1. Install the **ntfy** app (Android: Play Store · iOS: App Store)
+2. Tap `+` → enter `http://77.42.70.63/leagueflux-alerts` → Subscribe
+
+### Daemon alert flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--ntfy-url` | _(none)_ | Full ntfy topic URL. Also reads `NTFY_URL` env var. Omit to disable alerts. |
+| `--ntfy-token` | _(none)_ | Bearer token if ntfy access control is enabled. Also reads `NTFY_TOKEN` env var. |
+| `--alert-lead-mins` | `30` | How many minutes before kick-off to fire the alert. |
+| `--idle-sleep-mins` | `30` | Recommend `15` when alerts are enabled so the daemon wakes before alert windows. |
+
+### Manage the ntfy container
+
+```bash
+# Check status
+docker ps
+
+# View ntfy logs
+docker logs ntfy
+
+# Restart ntfy
+docker restart ntfy
+
+# Stop ntfy
+docker stop ntfy
 ```
 
 ---
@@ -591,7 +660,8 @@ Get-Content C:\Users\Buyen\.ssh\oracle_vm.pub
 
 ```bash
 apt update && apt upgrade -y
-apt install -y python3 python3-pip python3-venv git curl unzip wget gnupg ca-certificates
+apt install -y python3 python3-pip python3-venv git curl unzip wget gnupg ca-certificates docker.io
+systemctl enable --now docker
 ```
 
 ### 4. Install Google Chrome
@@ -629,7 +699,7 @@ Supabase credentials: project → **Settings → API** → Project URL + service
 ### 7. Test before starting daemon
 
 ```bash
-python src/headless_all_odds_cli.py --browser chrome --day 0 --no-save-html
+.venv/bin/python src/headless_all_odds_cli.py --browser chrome --day 0 --no-save-html
 ```
 
 Should print `Supabase client initialized` and `X matches` parsed. If that works, start the daemon.
