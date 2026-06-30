@@ -29,6 +29,7 @@ from headless.pipeline.all_odds_pipeline import AllOddsPipeline
 from headless.pipeline.match_pipeline import MatchPipeline
 from headless.selenium_fetch import SeleniumPageSourceFetcher
 from utils.all_odds_store import (
+    _parse_kickoff_datetime,
     list_detail_candidates,
     list_halftime_score_candidates,
     load_json,
@@ -38,7 +39,9 @@ from utils.all_odds_store import (
 )
 from utils.env_loader import load_env_from_assets
 from utils.market_payload_builder import _format_market_day_label, build_market_match
+from utils.notifier import NtfyNotifier
 from utils.paths import ensure_app_dirs, resolve_all_odds_dir
+from utils.signal_derive import combo_key, derive_signal_code, signal_complete
 
 
 # ── logging ──────────────────────────────────────────────────────────────────
@@ -67,6 +70,9 @@ class VmDaemon:
         detail_max_attempts: int = 3,
         ht_lookback_days: int = 7,
         browser: str | None = None,
+        ntfy_url: str = "",
+        ntfy_token: str = "",
+        alert_lead_mins: int = 30,
     ):
         self.config = config
         self.base_dir = base_dir
@@ -80,6 +86,9 @@ class VmDaemon:
         self.supabase_manager = SupabaseManager(config=config)
         self._state_path = base_dir / "daemon_state.json"
         self._state: dict = self._load_state()
+        # Alerts
+        self.notifier = NtfyNotifier(url=ntfy_url, token=ntfy_token)
+        self.alert_lead_mins = max(5, alert_lead_mins)  # fire this many minutes before kick-off
 
     # ── public ────────────────────────────────────────────────────────────────
 
@@ -115,7 +124,11 @@ class VmDaemon:
         if not self._get_pending_detail_dates():
             self._run_ht_phase()
 
-        # Sleep
+        # Phase 4 — Match alerts (ntfy)
+        if self.notifier.configured:
+            self._run_alert_phase()
+
+        # Sleep — wake early if an alert window is approaching
         sleep_secs = self._seconds_until_next_trigger(datetime.now())
         _log("info", f"Cycle complete — sleeping {sleep_secs // 60:.0f} min")
         self._save_state()
@@ -297,6 +310,124 @@ class VmDaemon:
                 except Exception as exc:
                     _log("error", f"  HT {date_iso} error: {exc}")
 
+    # ── phase 4: match alerts ─────────────────────────────────────────────────
+
+    def _run_alert_phase(self) -> None:
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        all_odds_dir = resolve_all_odds_dir(self.config)
+        path = all_odds_dir / f"{today}.json"
+        if not path.exists():
+            return
+
+        payload = load_json(path)
+        matches = payload.get("matches") or {}
+        if not matches:
+            return
+
+        alerted_today: set[str] = set(
+            self._state.get("alerts_sent", {}).get(today, [])
+        )
+        new_alerts: list[str] = []
+
+        for match_id, m in matches.items():
+            if match_id in alerted_today:
+                continue
+
+            # Skip already-started or terminal matches
+            status = str(m.get("status") or "").strip().lower()
+            if status and status not in ("scheduled", "not started", ""):
+                continue
+
+            kickoff = _parse_kickoff_datetime(today, str(m.get("time") or ""))
+            if kickoff is None:
+                continue
+
+            mins_until = (kickoff - now).total_seconds() / 60
+            # Fire when within (lead_mins + 5) down to 5 minutes before kick-off
+            window_hi = self.alert_lead_mins + 5
+            window_lo = 5
+            if not (window_lo <= mins_until <= window_hi):
+                continue
+
+            # Build notification content
+            home = str(m.get("home") or "?")
+            away = str(m.get("away") or "?")
+            competition = str(m.get("competition") or m.get("country") or "")
+            odds = m.get("odds") or {}
+            h_odds = str(odds.get("1") or odds.get("1b") or "").strip()
+            a_odds = str(odds.get("2") or odds.get("2b") or "").strip()
+            odds_text = f" · {h_odds}/{a_odds}" if h_odds and a_odds else ""
+
+            signal_text = ""
+            fh_text = ""
+
+            if self.supabase_manager.client:
+                try:
+                    res = (
+                        self.supabase_manager.client
+                        .from_("market_matches")
+                        .select("payload")
+                        .eq("match_id", match_id)
+                        .maybe_single()
+                        .execute()
+                    )
+                    if res.data:
+                        mp = res.data.get("payload") or {}
+                        chart, reality, h2h = derive_signal_code(mp)
+                        if signal_complete(chart, reality, h2h):
+                            key = combo_key(chart, reality, h2h)  # type: ignore[arg-type]
+                            signal_text = f" · {key}"
+
+                            # Determine fav from odds
+                            try:
+                                hf = float(h_odds) if h_odds else 0.0
+                                af = float(a_odds) if a_odds else 0.0
+                                home_fav = hf > 0 and af > 0 and hf < af
+                            except ValueError:
+                                home_fav = True
+
+                            vault_res = (
+                                self.supabase_manager.client
+                                .from_("signal_vault_master")
+                                .select("market_flags,sample_count")
+                                .eq("combo_key", key)
+                                .eq("home_fav", home_fav)
+                                .maybe_single()
+                                .execute()
+                            )
+                            if vault_res.data:
+                                flags = vault_res.data.get("market_flags") or {}
+                                fh_key = "FH-X2" if home_fav else "FH-1X"
+                                fh_rate = flags.get(fh_key)
+                                samples = vault_res.data.get("sample_count") or 0
+                                if fh_rate is not None:
+                                    fh_text = f" · {fh_key} {fh_rate}% ({samples}m)"
+                except Exception as exc:
+                    _log("warn", f"Alert signal lookup failed for {match_id}: {exc}")
+
+            mins_label = f"in {int(mins_until)}min"
+            title = f"{home} vs {away} {mins_label}"
+            body = f"{competition}{odds_text}{signal_text}{fh_text}"
+
+            ok = self.notifier.send(title, body, priority="high", tags=["soccer"])
+            if ok:
+                new_alerts.append(match_id)
+                _log("info", f"Alert sent: {home} vs {away} {mins_label}{signal_text}{fh_text}")
+            else:
+                _log("warn", f"Alert send failed: {match_id} ({home} vs {away})")
+
+        if new_alerts:
+            self._state.setdefault("alerts_sent", {})
+            existing = self._state["alerts_sent"].get(today, [])
+            self._state["alerts_sent"][today] = list(set(existing + new_alerts))
+            # Prune entries older than 7 days
+            cutoff = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d")
+            self._state["alerts_sent"] = {
+                d: v for d, v in self._state["alerts_sent"].items() if d >= cutoff
+            }
+            self._save_state()
+
     # ── sleep logic ───────────────────────────────────────────────────────────
 
     def _seconds_until_next_trigger(self, now: datetime) -> int:
@@ -309,7 +440,51 @@ class VmDaemon:
                 earliest = min(earliest, max(0, remaining))
             except Exception:
                 pass
+
+        # Wake early if an alert window is approaching for today's matches
+        if self.notifier.configured:
+            alert_wake = self._seconds_until_next_alert_window(now)
+            if alert_wake is not None:
+                earliest = min(earliest, alert_wake)
+
         return max(60, min(earliest, self.idle_sleep_secs))
+
+    def _seconds_until_next_alert_window(self, now: datetime) -> int | None:
+        """
+        Returns seconds until we should wake up to catch the next unalerted match.
+        Returns None if there are no upcoming matches to alert on.
+        """
+        today = now.strftime("%Y-%m-%d")
+        all_odds_dir = resolve_all_odds_dir(self.config)
+        path = all_odds_dir / f"{today}.json"
+        if not path.exists():
+            return None
+
+        payload = load_json(path)
+        matches = payload.get("matches") or {}
+        alerted_today: set[str] = set(
+            self._state.get("alerts_sent", {}).get(today, [])
+        )
+
+        soonest: int | None = None
+        for match_id, m in matches.items():
+            if match_id in alerted_today:
+                continue
+            status = str(m.get("status") or "").strip().lower()
+            if status and status not in ("scheduled", "not started", ""):
+                continue
+            kickoff = _parse_kickoff_datetime(today, str(m.get("time") or ""))
+            if kickoff is None:
+                continue
+            # We want to be awake at (kickoff - lead_mins)
+            wake_at = kickoff - timedelta(minutes=self.alert_lead_mins + 3)
+            secs = int((wake_at - now).total_seconds())
+            if secs <= 0:
+                # Already in window or past — wake immediately (next cycle)
+                return 60
+            if soonest is None or secs < soonest:
+                soonest = secs
+        return soonest
 
     # ── state persistence ─────────────────────────────────────────────────────
 
@@ -383,6 +558,25 @@ def build_parser() -> argparse.ArgumentParser:
         "--base-dir",
         help="Override the data root. Defaults to _headless_output in the current directory.",
     )
+    parser.add_argument(
+        "--ntfy-url",
+        default="",
+        help=(
+            "ntfy topic URL to send match alerts to, e.g. http://localhost/leagueflux-alerts. "
+            "Falls back to NTFY_URL env var. Omit to disable alerts."
+        ),
+    )
+    parser.add_argument(
+        "--ntfy-token",
+        default="",
+        help="Bearer token for the ntfy server (if access control is enabled). Falls back to NTFY_TOKEN env var.",
+    )
+    parser.add_argument(
+        "--alert-lead-mins",
+        type=int,
+        default=30,
+        help="Send alert this many minutes before kick-off. Default: 30.",
+    )
     return parser
 
 
@@ -415,6 +609,9 @@ def main(argv: list[str] | None = None) -> int:
         detail_max_attempts=args.detail_max_attempts,
         ht_lookback_days=args.ht_lookback_days,
         browser=args.browser,
+        ntfy_url=args.ntfy_url,
+        ntfy_token=args.ntfy_token,
+        alert_lead_mins=args.alert_lead_mins,
     )
     daemon.run()
     return 0
