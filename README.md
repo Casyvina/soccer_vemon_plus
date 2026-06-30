@@ -575,60 +575,68 @@ tail -f logs/daemon.log
 
 ---
 
-## Push notifications (ntfy)
+## Push notifications (ntfy.sh)
 
 The daemon sends match alerts to your phone ~30 minutes before kick-off. Each alert includes the signal combo (e.g. `O|AR|H`) and the FH-X2/1X vault rate pulled from Supabase.
+
+Uses [ntfy.sh](https://ntfy.sh) — a free public notification service. No server setup or SSL needed. iOS and Android both work out of the box.
+
+> **Topic name = your password.** Pick something hard to guess (e.g. `lf-signals-j7x3`). Anyone who knows the topic can subscribe or post to it.
 
 ### How it works
 
 - Daemon Phase 4 scans today's all_odds for matches kicking off in the next 20–45 minutes
 - Looks up the signal code and vault stats from `market_matches` + `signal_vault_master` in Supabase
-- Fires a push notification via ntfy running on the same VM
+- Posts a push notification to `https://ntfy.sh/YOUR-TOPIC`
 - Tracks sent alerts in `daemon_state.json` — never fires twice for the same match
 
-### Install ntfy on the VM (one-time)
+### Setup (one-time)
+
+**1. Start the daemon with your topic:**
 
 ```bash
-apt install -y docker.io
-systemctl enable --now docker
+kill $(pgrep -f headless_daemon)
 
-docker run -d --name ntfy --restart unless-stopped -p 80:80 \
-  -v /opt/ntfy:/var/cache/ntfy \
-  binwiederhier/ntfy serve --cache-file /var/cache/ntfy/cache.db
+nohup .venv/bin/python src/headless_daemon.py --browser chrome \
+  --ntfy-url https://ntfy.sh/YOUR-TOPIC-HERE \
+  --idle-sleep-mins 15 >> logs/daemon.log 2>&1 &
 
-# Verify
-docker ps
-curl -s http://localhost/leagueflux-alerts/json?poll=1
+echo "Daemon PID: $!"
+tail -f logs/daemon.log
 ```
 
-### Subscribe on your phone
+**2. Subscribe on your phone:**
 
-1. Install the **ntfy** app (Android: Play Store · iOS: App Store)
-2. Tap `+` → enter `http://77.42.70.63/leagueflux-alerts` → Subscribe
+- Install the **ntfy** app (Android: Play Store · iOS: App Store)
+- Open app → tap `+`
+- Server: `ntfy.sh` (leave as default)
+- Topic: `YOUR-TOPIC-HERE`
+- Subscribe
+
+**3. Test it works:**
+
+```bash
+curl -d "Test from LeagueFlux daemon" \
+  -H "Title: Test Alert" \
+  https://ntfy.sh/YOUR-TOPIC-HERE
+```
+
+Notification should appear on your phone within seconds.
 
 ### Daemon alert flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--ntfy-url` | _(none)_ | Full ntfy topic URL. Also reads `NTFY_URL` env var. Omit to disable alerts. |
-| `--ntfy-token` | _(none)_ | Bearer token if ntfy access control is enabled. Also reads `NTFY_TOKEN` env var. |
+| `--ntfy-url` | _(none)_ | Full ntfy topic URL e.g. `https://ntfy.sh/your-topic`. Also reads `NTFY_URL` env var. Omit to disable alerts. |
+| `--ntfy-token` | _(none)_ | Bearer token if using a private ntfy.sh account. Also reads `NTFY_TOKEN` env var. |
 | `--alert-lead-mins` | `30` | How many minutes before kick-off to fire the alert. |
-| `--idle-sleep-mins` | `30` | Recommend `15` when alerts are enabled so the daemon wakes before alert windows. |
+| `--idle-sleep-mins` | `30` | Use `15` when alerts are enabled so the daemon wakes before alert windows. |
 
-### Manage the ntfy container
+### Example notification
 
-```bash
-# Check status
-docker ps
-
-# View ntfy logs
-docker logs ntfy
-
-# Restart ntfy
-docker restart ntfy
-
-# Stop ntfy
-docker stop ntfy
+```
+Arsenal vs Chelsea in 28min
+Premier League · 1.85/4.20 · O|AR|H · FH-X2 74% (31m)
 ```
 
 ---
