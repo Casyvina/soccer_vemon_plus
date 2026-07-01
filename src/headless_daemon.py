@@ -416,7 +416,7 @@ class VmDaemon:
 
             # Try LeagueFlux Web Push first; fall back to ntfy
             if self.lf_notifier.configured:
-                ok = self.lf_notifier.send(title, body)
+                ok = self.lf_notifier.send(title, body, tag=f"lf-pre-{match_id}")
             else:
                 ok = self.ntfy_notifier.send(title, body, priority="high", tags=["soccer"])
 
@@ -508,7 +508,7 @@ class VmDaemon:
             body = competition if competition else "Match is live"
 
             if self.lf_notifier.configured:
-                ok = self.lf_notifier.send(title, body, tag="lf-kickoff")
+                ok = self.lf_notifier.send(title, body, tag=f"lf-ko-{match_id}")
             else:
                 ok = self.ntfy_notifier.send(title, body, priority="high", tags=["soccer", "bell"])
 
