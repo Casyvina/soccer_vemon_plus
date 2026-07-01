@@ -30,13 +30,16 @@ class LeagueFluxNotifier:
     def configured(self) -> bool:
         return bool(self.endpoint and self.secret)
 
-    def send(self, title: str, body: str, *, url: str = "/app/markets", tag: str = "lf-alert") -> bool:
+    def send(self, title: str, body: str, *, url: str = "/app/markets", tag: str = "lf-alert", type: str = "") -> bool:
         if not self.configured:
             return False
+        payload: dict = {"title": title, "body": body, "url": url, "tag": tag}
+        if type:
+            payload["type"] = type
         try:
             resp = requests.post(
                 self.endpoint,
-                json={"title": title, "body": body, "url": url, "tag": tag},
+                json=payload,
                 headers={
                     "Authorization": f"Bearer {self.secret}",
                     "Content-Type": "application/json",
