@@ -113,6 +113,11 @@ class VmDaemon:
     def _cycle(self) -> None:
         now = datetime.now()
 
+        # Alerts run FIRST — lightweight, no browser, must not wait behind scraping phases
+        if self.lf_notifier.configured or self.ntfy_notifier.configured:
+            self._run_alert_phase()
+        self._run_kickoff_alert_phase()
+
         # Phase 1 — Odds fetch
         due_offsets = self._offsets_due_for_odds(now)
         if due_offsets:
@@ -126,13 +131,6 @@ class VmDaemon:
         # Phase 3 — HT scores (only when details queue is empty)
         if not self._get_pending_detail_dates():
             self._run_ht_phase()
-
-        # Phase 4 — Match alerts (30-min pre-kick, all matches)
-        if self.lf_notifier.configured or self.ntfy_notifier.configured:
-            self._run_alert_phase()
-
-        # Phase 4b — Kick-off alerts (favourited matches only)
-        self._run_kickoff_alert_phase()
 
         # Sleep — wake early if an alert window is approaching
         sleep_secs = self._seconds_until_next_trigger(datetime.now())
