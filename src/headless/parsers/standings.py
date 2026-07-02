@@ -38,7 +38,34 @@ def _determine_seasonal_stage(
         return "unknown"
 
 
-def _parse_row(row_element: Tag, total_teams: int) -> dict | None:
+def _build_col_map(header_block: Tag) -> dict[str, int]:
+    """
+    Return {HEADER_TEXT_UPPER: value_cell_index}.
+    Skips the first two cells (# rank and team/division name).
+    """
+    cells = [
+        c.get_text(strip=True).upper()
+        for c in header_block.select(".ui-table__headerCell")
+    ]
+    # cells[0] = "#", cells[1] = team/division name — not value cells
+    return {name: i for i, name in enumerate(cells[2:])}
+
+
+def _cell(value_cells: list[str], col_map: dict[str, int], *names: str, fallback_idx: int = -1) -> str:
+    for name in names:
+        if name in col_map:
+            idx = col_map[name]
+            return value_cells[idx] if idx < len(value_cells) else ""
+    if fallback_idx >= 0:
+        return value_cells[fallback_idx] if fallback_idx < len(value_cells) else ""
+    return ""
+
+
+def _parse_row(
+    row_element: Tag,
+    total_teams: int,
+    col_map: dict[str, int] | None = None,
+) -> dict | None:
     if row_element is None:
         return None
 
@@ -53,14 +80,29 @@ def _parse_row(row_element: Tag, total_teams: int) -> dict | None:
             text_or_empty(node) for node in row_element.select("span.table__cell--value")
         ]
 
-        mp = safe_int(value_cells[0]) if len(value_cells) > 0 else 0
-        w = safe_int(value_cells[1]) if len(value_cells) > 1 else 0
-        d = safe_int(value_cells[2]) if len(value_cells) > 2 else 0
-        l = safe_int(value_cells[3]) if len(value_cells) > 3 else 0
-        goals_text = value_cells[4] if len(value_cells) > 4 else "0:0"
-        gf, ga = parse_goals(goals_text)
-        gd = safe_int(value_cells[5]) if len(value_cells) > 5 else gf - ga
-        pts = safe_int(value_cells[6]) if len(value_cells) > 6 else (3 * w + d)
+        cm = col_map or {}
+        is_mls = "WP" in cm or "LP" in cm
+
+        mp = safe_int(_cell(value_cells, cm, "MP", fallback_idx=0))
+        w = safe_int(_cell(value_cells, cm, "W", fallback_idx=1))
+
+        if is_mls:
+            # MLS format: MP, W, WP, LP, L, G, Pts — no draws, no explicit GD column
+            d = 0
+            l = safe_int(_cell(value_cells, cm, "L", fallback_idx=4))
+            goals_text = _cell(value_cells, cm, "G", fallback_idx=5)
+            gf, ga = parse_goals(goals_text)
+            gd = gf - ga
+            pts = safe_int(_cell(value_cells, cm, "PTS", fallback_idx=6))
+        else:
+            # Standard format: MP, W, D, L, G, GD, Pts
+            d = safe_int(_cell(value_cells, cm, "D", fallback_idx=2))
+            l = safe_int(_cell(value_cells, cm, "L", fallback_idx=3))
+            goals_text = _cell(value_cells, cm, "G", fallback_idx=4)
+            gf, ga = parse_goals(goals_text)
+            gd_str = _cell(value_cells, cm, "GD", fallback_idx=5)
+            gd = safe_int(gd_str) if gd_str and ":" not in gd_str else gf - ga
+            pts = safe_int(_cell(value_cells, cm, "PTS", fallback_idx=6))
 
         form_cell = row_element.select_one(".table__cell--form")
         form = parse_form_icons(form_cell)
@@ -93,30 +135,94 @@ def parse_standings_page(
     away_team_name: str,
 ) -> dict:
     soup = BeautifulSoup(str(html or ""), "html.parser")
-    rows = soup.select(".ui-table__body .ui-table__row")
-    total_teams = len(rows)
 
+    # Collect all ui-table blocks — each may have its own column format
+    table_blocks = soup.select(".ui-table")
+
+    # Fallback: if no ui-table wrappers, use old flat selector
+    if not table_blocks:
+        rows = soup.select(".ui-table__body .ui-table__row")
+        return _parse_rows(rows, len(rows), col_map=None,
+                           home_name_lc=str(home_team_name or "").strip().lower(),
+                           away_name_lc=str(away_team_name or "").strip().lower())
+
+    home_name_lc = str(home_team_name or "").strip().lower()
+    away_name_lc = str(away_team_name or "").strip().lower()
+
+    result_all: list[dict] = []
+    seen_teams: set[str] = set()
+    promotion: list[dict] = []
+    relegation: list[dict] = []
+    home_team = None
+    away_team = None
+
+    # Use the largest block's row count as total_teams (best estimate for stage calc)
+    largest_block_rows = max(
+        (len(b.select(".ui-table__body .ui-table__row")) for b in table_blocks),
+        default=0,
+    )
+
+    for block in table_blocks:
+        header = block.select_one(".ui-table__header")
+        col_map = _build_col_map(header) if header else {}
+        rows = block.select(".ui-table__body .ui-table__row")
+
+        for row in rows:
+            parsed = _parse_row(row, largest_block_rows, col_map=col_map)
+            if not parsed:
+                continue
+
+            team_key = str(parsed.get("team") or "").strip().lower()
+            # Skip duplicates — conference tables repeat division teams
+            if team_key in seen_teams:
+                continue
+            seen_teams.add(team_key)
+
+            result_all.append(parsed)
+            title = str(parsed.get("promotion_title") or "").lower()
+            if "promotion" in title or "champ" in title or "promoted" in title:
+                promotion.append(parsed)
+            elif "relegation" in title or "relegat" in title:
+                relegation.append(parsed)
+
+            if home_name_lc and home_name_lc in team_key:
+                home_team = parsed
+            if away_name_lc and away_name_lc in team_key:
+                away_team = parsed
+
+    return {
+        "total_rows": len(result_all),
+        "promotions": len(promotion),
+        "relegations": len(relegation),
+        "home_team": home_team,
+        "away_team": away_team,
+        "all": result_all,
+    }
+
+
+def _parse_rows(
+    rows: list[Tag],
+    total_teams: int,
+    col_map: dict[str, int] | None,
+    home_name_lc: str,
+    away_name_lc: str,
+) -> dict:
     result_all = []
     promotion = []
     relegation = []
     home_team = None
     away_team = None
 
-    home_name_lc = str(home_team_name or "").strip().lower()
-    away_name_lc = str(away_team_name or "").strip().lower()
-
     for row in rows:
-        parsed = _parse_row(row, total_teams)
+        parsed = _parse_row(row, total_teams, col_map=col_map)
         if not parsed:
             continue
-
         result_all.append(parsed)
         title = str(parsed.get("promotion_title") or "").lower()
         if "promotion" in title or "champ" in title or "promoted" in title:
             promotion.append(parsed)
         elif "relegation" in title or "relegat" in title:
             relegation.append(parsed)
-
         team_name = str(parsed.get("team") or "").lower()
         if home_name_lc and home_name_lc in team_name:
             home_team = parsed
