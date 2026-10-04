@@ -158,10 +158,16 @@ def _parse_match_row(
 
 def _parse_time_and_status(match_el: Tag) -> tuple[str, str]:
     time_text = text_or_empty(match_el.select_one(".event__time"))
-    score_state = attr_or_empty(
-        match_el.select_one("[data-testid='wcl-matchRowScore']"),
-        "data-state",
-    )
+
+    # Derive status from match row CSS classes (wcl-matchRowScore data-state removed)
+    row_classes = set(match_el.get("class") or [])
+    if "event__match--live" in row_classes:
+        score_state = "live"
+    elif "event__match--scheduled" in row_classes:
+        score_state = "scheduled"
+    else:
+        score_state = ""
+
     if time_text:
         return time_text, score_state or "scheduled"
 
@@ -172,7 +178,12 @@ def _parse_time_and_status(match_el: Tag) -> tuple[str, str]:
             stage_values.append(text)
 
     if stage_values:
-        return " ".join(stage_values), score_state or "unknown"
+        return " ".join(stage_values), score_state or "live"
+
+    # No time, no stage text — finished if scores are present
+    if not score_state and match_el.select("[data-testid='wcl-tableScore']"):
+        return "FT", "finished"
+
     if score_state:
         return score_state.upper(), score_state
     return "", ""
@@ -209,7 +220,7 @@ def _parse_main_odds(match_el: Tag) -> dict[str, str]:
 
 
 def _parse_row_scores(match_el: Tag, *, score_state: str = "") -> dict[str, int | str]:
-    score_nodes = match_el.select("[data-testid='wcl-matchRowScore']")
+    score_nodes = match_el.select("[data-testid='wcl-tableScore']")
     if not score_nodes:
         return {}
 
@@ -226,7 +237,11 @@ def _parse_row_scores(match_el: Tag, *, score_state: str = "") -> dict[str, int 
             away_text = value
 
         if not node_state:
-            node_state = attr_or_empty(node, "data-state")
+            data_live = attr_or_empty(node, "data-live")
+            if data_live == "true":
+                node_state = "live"
+            elif data_live == "false":
+                node_state = "finished"
 
     if not home_text or not away_text:
         return {}

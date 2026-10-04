@@ -53,6 +53,33 @@ def _extract_team_name(soup: BeautifulSoup, side: str) -> str:
     return clean_team_name(attr_or_empty(image, "alt"))
 
 
+_TERMINAL_STATUS_LABELS = frozenset({
+    "finished", "ft", "aet", "ap", "after extra time",
+    "after penalties", "awarded", "walkover", "cancelled",
+    "postponed", "abandoned",
+})
+
+
+def parse_match_score(soup: BeautifulSoup) -> tuple[str, str]:
+    wrapper = soup.select_one(".detailScore__wrapper")
+    if not wrapper:
+        return "", ""
+    spans = [
+        s for s in wrapper.find_all("span", recursive=False)
+        if "divider" not in " ".join(s.get("class") or [])
+    ]
+    if len(spans) >= 2:
+        return spans[0].get_text(strip=True), spans[1].get_text(strip=True)
+    return "", ""
+
+
+def parse_match_status(soup: BeautifulSoup) -> dict:
+    label = text_or_empty(soup.select_one(".detailScore__status"))
+    normalized = label.lower().strip()
+    is_terminal = normalized in _TERMINAL_STATUS_LABELS
+    return {"label": label, "normalized": normalized, "is_terminal": is_terminal}
+
+
 def parse_match_details(soup: BeautifulSoup) -> dict[str, str]:
     start_node = soup.select_one("div.duelParticipant__startTime div")
     dt_raw = text_or_empty(start_node)
@@ -61,11 +88,14 @@ def parse_match_details(soup: BeautifulSoup) -> dict[str, str]:
     else:
         date_text, time_text = "", ""
 
+    score_home, score_away = parse_match_score(soup)
     return {
         "date": date_text.strip(),
         "time": time_text.strip(),
         "home_team": _extract_team_name(soup, "home"),
         "away_team": _extract_team_name(soup, "away"),
+        "score_home": score_home,
+        "score_away": score_away,
     }
 
 
@@ -75,4 +105,5 @@ def parse_match_page(html: str) -> dict[str, object]:
         "breadcrumb": parse_breadcrumb_info(soup),
         "infobox": parse_infobox_text(soup),
         "match_details": parse_match_details(soup),
+        "match_status": parse_match_status(soup),
     }

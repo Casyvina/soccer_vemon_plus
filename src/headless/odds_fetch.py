@@ -65,14 +65,11 @@ class SeleniumOddsPageFetcher(SeleniumPageSourceFetcher):
                 pass
 
     def _open_home(self, driver) -> None:
-        self._load_url_with_retries(
-            driver,
-            self._safe_get("core", "default_url", "https://www.flashscore.com/"),
-        )
+        # Direct odds URL — no tab navigation needed
+        self._load_url_with_retries(driver, "https://www.flashscore.com/odds/")
         self._dismiss_cookie_overlay(driver)
         self._dismiss_message(driver)
-        self._wait_for_filters(driver)
-        self._activate_odds_tab(driver)
+        self._wait_for_odds_content(driver)
 
     def _wait_for_filters(self, driver) -> None:
         wait = WebDriverWait(driver, self.timeout_seconds)

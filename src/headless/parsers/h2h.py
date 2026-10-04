@@ -24,11 +24,13 @@ def parse_h2h_row(row: Tag, source_url: str) -> dict[str, str] | None:
         ),
         "event": text_or_empty(row.select_one(".h2h__event span:nth-of-type(2)")),
         "home": text_or_empty(
-            row.select_one(".h2h__homeParticipant [data-testid='wcl-scores-simple-text-01']")
+            row.select_one(".h2h__homeParticipant [data-testid='wcl-simple-text-01']")
+            or row.select_one(".h2h__homeParticipant [data-testid='wcl-scores-simple-text-01']")
             or row.select_one(".h2h__homeParticipant .h2h__participantInner")
         ),
         "away": text_or_empty(
-            row.select_one(".h2h__awayParticipant [data-testid='wcl-scores-simple-text-01']")
+            row.select_one(".h2h__awayParticipant [data-testid='wcl-simple-text-01']")
+            or row.select_one(".h2h__awayParticipant [data-testid='wcl-scores-simple-text-01']")
             or row.select_one(".h2h__awayParticipant .h2h__participantInner")
         ),
         "score_home": score_home,
@@ -45,7 +47,8 @@ def parse_h2h_sections(html: str, source_url: str = "") -> list[dict]:
     parsed_sections: list[dict] = []
     for section in sections:
         title = text_or_empty(
-            section.select_one("[data-testid='wcl-scores-overline-02']")
+            section.select_one("[data-testid='wcl-overline-02']")
+            or section.select_one("[data-testid='wcl-scores-overline-02']")
         )
 
         matches = []
