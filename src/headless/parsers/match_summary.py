@@ -27,7 +27,10 @@ def parse_half_scores(html: str) -> dict[str, str]:
     for header in soup.select(
         "div.wclHeaderSection--summary[data-testid='wcl-headerSection-text']"
     ):
-        spans = header.select('span[data-testid="wcl-scores-overline-02"]')
+        spans = (
+            header.select('span[data-testid="wcl-overline-02"]')
+            or header.select('span[data-testid="wcl-scores-overline-02"]')
+        )
         if len(spans) < 2:
             continue
         label = text_or_empty(spans[0]).lower()

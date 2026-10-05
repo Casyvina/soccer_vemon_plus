@@ -141,7 +141,10 @@ def _parse_match_row(
     phase: str,
 ) -> list[str] | None:
     try:
-        time_text = text_or_empty(match_el.select_one(".event__time"))
+        time_text = text_or_empty(
+            match_el.select_one(".event__stageTime--date")
+            or match_el.select_one(".event__time")
+        )
         parts = [part for part in time_text.split(" ") if part]
         date_part = parts[0] if parts else ""
         time_part = parts[1] if len(parts) > 1 else ""
