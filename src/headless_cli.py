@@ -287,6 +287,10 @@ def main(argv: list[str] | None = None) -> int:
     config = ConfigManager()
     ensure_app_dirs(config)
 
+    # --browser without --rendered is always a mistake; auto-enable rendered mode
+    if args.browser and not args.rendered:
+        args.rendered = True
+
     try:
         direct_urls = _load_urls_from_direct_sources(args)
         all_odds_candidates, all_odds_path, all_odds_payload = _load_all_odds_candidates(
