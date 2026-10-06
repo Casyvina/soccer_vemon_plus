@@ -148,7 +148,7 @@ class VmDaemon:
     # ── phase 0: league tables ────────────────────────────────────────────────
 
     def _maybe_run_league_phase(self, now: datetime) -> None:
-        if now.weekday() not in (0, 4):  # Monday=0, Friday=4
+        if now.weekday() != 0:  # Monday only
             return
         today = now.strftime("%Y-%m-%d")
         if self._state.get("last_league_fetch") == today:
