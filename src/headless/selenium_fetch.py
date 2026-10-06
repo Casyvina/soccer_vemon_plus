@@ -166,12 +166,15 @@ class SeleniumPageSourceFetcher:
             ),
         }
 
-        # Keys like "summary_last_<mid>" / "summary_h2h_<mid>" share the summary wait;
-        # keys like "h2h_standings::<mid>" share the standings wait
+        # summary_last_<mid> / summary_h2h_<mid>  → summary wait
+        # h2h_standings::<mid>  → standings wait
+        # last_h2h::<team>      → h2h_overall wait
+        # last_standings::<team>→ standings wait
         lookup = (
             key if key in selectors
             else "summary" if key.startswith("summary")
-            else "standings_overall" if key.startswith("h2h_standings")
+            else "h2h_overall" if key.startswith("last_h2h")
+            else "standings_overall" if key.startswith("h2h_standings") or key.startswith("last_standings")
             else None
         )
         selector = selectors.get(lookup) if lookup else None
