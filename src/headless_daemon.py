@@ -74,6 +74,7 @@ class VmDaemon:
         detail_max_attempts: int = 3,
         ht_lookback_days: int = 7,
         browser: str | None = None,
+        refetch: bool = False,
         leagueflux_url: str = "",
         leagueflux_notify_secret: str = "",
         ntfy_url: str = "",
@@ -83,6 +84,7 @@ class VmDaemon:
         self.config = config
         self.base_dir = base_dir
         self.days_ahead = max(1, days_ahead)
+        self.refetch = bool(refetch)
         self.recheck_interval = timedelta(hours=max(0.5, recheck_hours))
         self.idle_sleep_secs = max(60, int(idle_sleep_mins * 60))
         self.db_batch_size = max(0, db_batch_size)
@@ -261,7 +263,7 @@ class VmDaemon:
             payload = load_json(path)
             if list_detail_candidates(
                 payload,
-                include_fetched=False,
+                include_fetched=self.refetch,
                 only_failed=False,
                 max_attempts=self.detail_max_attempts,
             ):
@@ -286,7 +288,7 @@ class VmDaemon:
                 payload = load_json(path)
                 candidates = list_detail_candidates(
                     payload,
-                    include_fetched=False,
+                    include_fetched=self.refetch,
                     only_failed=False,
                     max_attempts=self.detail_max_attempts,
                 )
@@ -757,6 +759,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=30,
         help="Send alert this many minutes before kick-off. Default: 30.",
     )
+    parser.add_argument(
+        "--refetch",
+        action="store_true",
+        default=False,
+        help="Re-process matches that are already marked details_fetched=true. Use after a Flashscore HTML change or when you want to rebuild all detail data.",
+    )
     return parser
 
 
@@ -789,6 +797,7 @@ def main(argv: list[str] | None = None) -> int:
         detail_max_attempts=args.detail_max_attempts,
         ht_lookback_days=args.ht_lookback_days,
         browser=args.browser,
+        refetch=args.refetch,
         leagueflux_url=args.leagueflux_url,
         leagueflux_notify_secret=args.leagueflux_notify_secret,
         ntfy_url=args.ntfy_url,

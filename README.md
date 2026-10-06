@@ -624,6 +624,22 @@ echo "Daemon PID: $!"
 tail -f logs/daemon.log
 ```
 
+To restart and re-process all matches (e.g. after a Flashscore HTML change):
+
+```bash
+kill $(pgrep -f headless_daemon)
+
+nohup .venv/bin/python src/headless_daemon.py --browser chrome \
+  --leagueflux-url https://leagueflux.com \
+  --leagueflux-notify-secret YOUR_NOTIFICATION_API_SECRET \
+  --idle-sleep-mins 15 --refetch >> logs/daemon.log 2>&1 &
+
+echo "Daemon PID: $!"
+tail -f logs/daemon.log
+```
+
+`--refetch` re-queues matches already marked `details_fetched`, rebuilding their detail data from scratch. Drop the flag on the next restart to return to normal incremental behaviour.
+
 **4. Subscribe on your phone:**
 
 - Open LeagueFlux in Safari → Share → Add to Home Screen
