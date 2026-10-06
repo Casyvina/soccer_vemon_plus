@@ -176,5 +176,6 @@ _headless_output/
 # Claude Code local settings
 .claude/settings.local.json
 
-# One-off inspection snapshots
+# One-off inspection snapshots and scripts
 _inspect_*.html
+_inspect_*.py
