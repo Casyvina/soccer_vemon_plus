@@ -1,6 +1,8 @@
 """
 VM daemon — runs forever, orchestrating three phases in a loop:
 
+  0. League tables — Mon/Fri only: fetch results + fixtures for all URLs in
+                     src/assets/league_urls.txt (one URL per line)
   1. Odds fetch   — fetch next N days odds pages; recheck every --recheck-hours
   2. Details fetch — fetch match details for all pending matches across open days
   3. HT scores    — refresh half-time scores for completed matches (while idle)
@@ -24,8 +26,10 @@ from pathlib import Path
 
 from core.managers.config_manager import ConfigManager
 from core.managers.supabase_manager import SupabaseManager
+from headless.league_fetch import SeleniumLeaguePageFetcher
 from headless.odds_fetch import SeleniumOddsPageFetcher
 from headless.pipeline.all_odds_pipeline import AllOddsPipeline
+from headless.pipeline.league_pipeline import LeaguePipeline
 from headless.pipeline.match_pipeline import MatchPipeline
 from headless.selenium_fetch import SeleniumPageSourceFetcher
 from utils.all_odds_store import (
@@ -118,6 +122,9 @@ class VmDaemon:
             self._run_alert_phase()
         self._run_kickoff_alert_phase()
 
+        # Phase 0 — League tables (Monday=0, Friday=4 only)
+        self._maybe_run_league_phase(now)
+
         # Phase 1 — Odds fetch
         due_offsets = self._offsets_due_for_odds(now)
         if due_offsets:
@@ -137,6 +144,48 @@ class VmDaemon:
         _log("info", f"Cycle complete — sleeping {sleep_secs // 60:.0f} min")
         self._save_state()
         time.sleep(sleep_secs)
+
+    # ── phase 0: league tables ────────────────────────────────────────────────
+
+    def _maybe_run_league_phase(self, now: datetime) -> None:
+        if now.weekday() not in (0, 4):  # Monday=0, Friday=4
+            return
+        today = now.strftime("%Y-%m-%d")
+        if self._state.get("last_league_fetch") == today:
+            return
+        urls = self._load_league_urls()
+        if not urls:
+            _log("info", "League phase: no URLs in league_urls.txt — skipping")
+            return
+        self._run_league_phase(urls)
+        self._state["last_league_fetch"] = today
+
+    def _load_league_urls(self) -> list[str]:
+        urls_path = Path(__file__).resolve().parent / "assets" / "league_urls.txt"
+        if not urls_path.exists():
+            return []
+        urls: list[str] = []
+        for raw in urls_path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#"):
+                continue
+            urls.append(line)
+        return urls
+
+    def _run_league_phase(self, urls: list[str]) -> None:
+        _log("info", f"League phase: {len(urls)} league(s)")
+        fetcher = SeleniumLeaguePageFetcher(config=self.config, browser_name=self.browser)
+        pipeline = LeaguePipeline(config=self.config, page_source_fetcher=fetcher)
+        for url in urls:
+            try:
+                result = pipeline.run_from_url(url, save_html=True, save_json=True)
+                slug = url.rstrip("/").split("/")[-1] or url
+                _log("info",
+                     f"  League {slug}: "
+                     f"results={result.payload.get('results_count', 0)} "
+                     f"fixtures={result.payload.get('fixtures_count', 0)}")
+            except Exception as exc:
+                _log("error", f"  League fetch failed {url}: {exc}")
 
     # ── phase 1: odds ─────────────────────────────────────────────────────────
 

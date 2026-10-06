@@ -1,0 +1,13 @@
+# League URLs to fetch every Monday and Friday.
+# One URL per line. Results, fixtures, or base competition URL all work.
+# Lines starting with # are ignored.
+#
+# Examples:
+# https://www.flashscore.com/football/england/premier-league/results/
+# https://www.flashscore.com/football/spain/laliga/results/
+# https://www.flashscore.com/football/germany/bundesliga/results/
+# https://www.flashscore.com/football/italy/serie-a/results/
+# https://www.flashscore.com/football/france/ligue-1/results/
+# https://www.flashscore.com/football/portugal/liga-portugal/results/
+# https://www.flashscore.com/football/netherlands/eredivisie/results/
+# https://www.flashscore.com/football/usa/mls/results/
