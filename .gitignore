@@ -172,3 +172,9 @@ cython_debug/
 # Flet
 storage/
 _headless_output/
+
+# Claude Code local settings
+.claude/settings.local.json
+
+# One-off inspection snapshots
+_inspect_*.html
