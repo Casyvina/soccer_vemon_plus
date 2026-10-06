@@ -140,7 +140,8 @@ class SeleniumPageSourceFetcher:
                 By.XPATH,
                 (
                     "//div[contains(@class,'duelParticipant__home')]"
-                    "//div[contains(@class,'participant__participantName')]//a"
+                    "//div[contains(@class,'participant__participantName')]"
+                    "//a[normalize-space(.) != '']"
                 ),
             ),
             "h2h_overall": (
