@@ -153,33 +153,54 @@ class VmDaemon:
         today = now.strftime("%Y-%m-%d")
         if self._state.get("last_league_fetch") == today:
             return
-        urls = self._load_league_urls()
+        urls = self._collect_league_urls_from_odds()
         if not urls:
-            _log("info", "League phase: no URLs in league_urls.txt — skipping")
+            _log("info", "League phase: no competitions found in recent match data — skipping")
             return
+        _log("info", f"League phase: {len(urls)} unique competition(s) from last 7 days")
         self._run_league_phase(urls)
         self._state["last_league_fetch"] = today
 
-    def _load_league_urls(self) -> list[str]:
-        urls_path = Path(__file__).resolve().parent / "assets" / "league_urls.txt"
-        if not urls_path.exists():
-            return []
-        urls: list[str] = []
-        for raw in urls_path.read_text(encoding="utf-8").splitlines():
-            line = raw.strip()
-            if not line or line.startswith("#"):
+    def _collect_league_urls_from_odds(self, lookback_days: int = 7) -> list[str]:
+        """
+        Derive league results URLs from raw match JSON files saved over the
+        last N days. Each file contains a breadcrumb.competition_url that maps
+        directly to a Flashscore competition path.
+        """
+        all_odds_dir = resolve_all_odds_dir(self.config)
+        raw_dir = all_odds_dir.parent  # .../data/raw/
+        now = datetime.now()
+        seen: dict[str, None] = {}  # ordered dedup
+
+        for offset in range(lookback_days):
+            date_iso = (now - timedelta(days=offset)).strftime("%Y-%m-%d")
+            date_dir = raw_dir / date_iso
+            if not date_dir.is_dir():
                 continue
-            urls.append(line)
-        return urls
+            for json_file in date_dir.glob("*.json"):
+                try:
+                    data = load_json(json_file)
+                    comp_path = str(
+                        (data.get("breadcrumb") or {}).get("competition_url") or ""
+                    ).strip()
+                    if not comp_path:
+                        continue
+                    if comp_path.startswith("/"):
+                        comp_path = f"https://www.flashscore.com{comp_path}"
+                    results_url = comp_path.rstrip("/") + "/results/"
+                    seen[results_url] = None
+                except Exception:
+                    continue
+
+        return list(seen.keys())
 
     def _run_league_phase(self, urls: list[str]) -> None:
-        _log("info", f"League phase: {len(urls)} league(s)")
         fetcher = SeleniumLeaguePageFetcher(config=self.config, browser_name=self.browser)
         pipeline = LeaguePipeline(config=self.config, page_source_fetcher=fetcher)
         for url in urls:
             try:
                 result = pipeline.run_from_url(url, save_html=True, save_json=True)
-                slug = url.rstrip("/").split("/")[-1] or url
+                slug = url.rstrip("/").rsplit("/", 2)[-2] or url
                 _log("info",
                      f"  League {slug}: "
                      f"results={result.payload.get('results_count', 0)} "
