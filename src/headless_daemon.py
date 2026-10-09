@@ -73,6 +73,7 @@ class VmDaemon:
         db_batch_size: int = 50,
         detail_max_attempts: int = 3,
         ht_lookback_days: int = 7,
+        ht_per_date_limit: int = 50,
         browser: str | None = None,
         refetch: bool = False,
         leagueflux_url: str = "",
@@ -90,6 +91,7 @@ class VmDaemon:
         self.db_batch_size = max(0, db_batch_size)
         self.detail_max_attempts = max(1, detail_max_attempts)
         self.ht_lookback_days = max(0, ht_lookback_days)
+        self.ht_per_date_limit = max(0, ht_per_date_limit)
         self.browser = browser
         self.supabase_manager = SupabaseManager(config=config)
         self._state_path = base_dir / "daemon_state.json"
@@ -137,9 +139,11 @@ class VmDaemon:
         if pending_dates:
             self._run_details_phase(pending_dates)
 
-        # Phase 3 — HT scores (only when details queue is empty)
-        if not self._get_pending_detail_dates():
-            self._run_ht_phase()
+        # Phase 3 — HT scores
+        # Run every cycle — list_halftime_score_candidates already skips matches
+        # within buffer_hours of kickoff, so future-pending details don't block
+        # score collection for past matches.
+        self._run_ht_phase()
 
         # Sleep — wake early if an alert window is approaching
         sleep_secs = self._seconds_until_next_trigger(datetime.now())
@@ -379,7 +383,11 @@ class VmDaemon:
         with ht_fetcher:
             for date_iso in ht_dates:
                 try:
-                    summary = ht_pipeline.run_halftime_score_refresh(date_iso, persist=True)
+                    summary = ht_pipeline.run_halftime_score_refresh(
+                        date_iso,
+                        limit=self.ht_per_date_limit,
+                        persist=True,
+                    )
                     _log("info",
                          f"  HT {date_iso}: candidates={summary['candidates']} "
                          f"updated={summary['updated']} failed={summary['failed']}")
@@ -722,6 +730,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="How many past days to scan for missing HT scores. Default: 7.",
     )
     parser.add_argument(
+        "--ht-per-date-limit",
+        type=int,
+        default=50,
+        help="Max matches to score per date per cycle (0 = unlimited). Caps catch-up work so details still run. Default: 50.",
+    )
+    parser.add_argument(
         "--browser",
         choices=["chrome", "firefox", "edge"],
         help="Override the configured browser.",
@@ -796,6 +810,7 @@ def main(argv: list[str] | None = None) -> int:
         db_batch_size=args.db_batch_size,
         detail_max_attempts=args.detail_max_attempts,
         ht_lookback_days=args.ht_lookback_days,
+        ht_per_date_limit=args.ht_per_date_limit,
         browser=args.browser,
         refetch=args.refetch,
         leagueflux_url=args.leagueflux_url,
