@@ -94,12 +94,15 @@ class MatchPipeline:
         print(f"  Standings: {standings_overall.get('total_rows', 0)} teams")
 
         t1 = time.time()
+        current_match_id = extract_match_id(routes.match_url)
         supplemental_pages = self._fetch_named_pages(
-            self._build_supplemental_requests(h2h_sections)
+            self._build_supplemental_requests(h2h_sections, current_match_id=current_match_id)
         )
         print(f"  Supplemental: {len(supplemental_pages)} pages — {time.time() - t1:.1f}s")
 
-        summary_requests = self._collect_summary_requests(h2h_sections, home_team, away_team)
+        summary_requests = self._collect_summary_requests(
+            h2h_sections, home_team, away_team, current_match_id=current_match_id
+        )
         t2 = time.time()
         summary_pages = self._fetch_summary_pages(summary_requests)
         summaries = self._parse_summaries(summary_pages, summary_requests)
@@ -241,7 +244,7 @@ class MatchPipeline:
     # ------------------------------------------------------------------
 
     def _build_supplemental_requests(
-        self, h2h_sections: list[dict]
+        self, h2h_sections: list[dict], *, current_match_id: str = ""
     ) -> list[tuple[str, str]]:
         items: list[tuple[str, str]] = []
 
@@ -256,6 +259,11 @@ class MatchPipeline:
                     continue
                 match_url = str(matches[0].get("url") or "").strip()
                 if not match_url:
+                    continue
+                # Skip if Flashscore now lists the current match as the team's
+                # most recent game (happens after the match finishes and gets
+                # re-fetched) — would create a useless self-referencing entry.
+                if current_match_id and extract_match_id(match_url) == current_match_id:
                     continue
                 try:
                     routes = build_match_routes(match_url)
@@ -282,7 +290,7 @@ class MatchPipeline:
         ][:5]:
             match_url = str(match_item.get("url") or "").strip()
             match_id = extract_match_id(match_url)
-            if not match_id:
+            if not match_id or match_id == current_match_id:
                 continue
             try:
                 routes = build_match_routes(match_url)
@@ -310,6 +318,8 @@ class MatchPipeline:
         h2h_sections: list[dict],
         main_home_team: str,
         main_away_team: str,
+        *,
+        current_match_id: str = "",
     ) -> list[dict]:
         requests: list[dict] = []
         seen_urls: set[str] = set()
@@ -329,6 +339,11 @@ class MatchPipeline:
             match_url = str(match_item.get("url") or "").strip()
             mid = extract_match_id(match_url)
             if not mid or not match_url:
+                continue
+            # After a match finishes, Flashscore lists it as each team's most
+            # recent game. Skip it so we don't fetch a match's own summary as
+            # "pre-match context" for itself.
+            if current_match_id and mid == current_match_id:
                 continue
             summary_url = self._summary_url(match_url)
             if summary_url in seen_urls:
@@ -375,6 +390,8 @@ class MatchPipeline:
                 match_url = str(match_item.get("url") or "").strip()
                 mid = extract_match_id(match_url)
                 if not mid or not match_url:
+                    continue
+                if current_match_id and mid == current_match_id:
                     continue
                 summary_url = self._summary_url(match_url)
                 if summary_url in seen_urls:
